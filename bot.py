@@ -12,7 +12,7 @@ import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 # ===== توکن =====
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+BOT_TOKEN = "8092823571:AAHnuu9ff32CUSQe1p9axBlmvHXKJ4WCGW4"
 
 if not BOT_TOKEN:
     print("❌ توکن ربات پیدا نشد!")
@@ -171,29 +171,11 @@ def upd_report(report_id, status):
 
 # ===== توابع کمکی =====
 def is_group_admin(group_id, user_id):
-    """بررسی اینکه کاربر ادمین گروه هست یا نه (حتی با حالت ناشناس)"""
     try:
-        # روش اول: چک کردن مستقیم
         m = bot.get_chat_member(group_id, user_id)
-        if m.status in ['administrator', 'creator']:
-            return True
+        return m.status in ['administrator', 'creator']
     except:
-        pass
-    
-    # روش دوم: اگه کاربر ناشناس باشه، از لیست ادمین‌ها چک میکنیم
-    try:
-        admins = bot.get_chat_administrators(group_id)
-        for admin in admins:
-            if admin.user.id == user_id:
-                return True
-        # همچنین چک میکنیم که آیا کاربر در لیست ادمین‌هاست
-        admin_ids = [a.user.id for a in admins]
-        if user_id in admin_ids:
-            return True
-    except:
-        pass
-    
-    return False
+        return False
 
 def get_name(user):
     return user.first_name or user.username or 'کاربر'
@@ -221,11 +203,6 @@ def get_admins_mention(group_id):
     except:
         pass
     return mentions
-
-def get_user_mention(user):
-    if user.username:
-        return f"@{user.username}"
-    return f"<a href='tg://user?id={user.id}'>{user.first_name}</a>"
 
 def get_user_link(user):
     return f"<a href='tg://user?id={user.id}'>{user.first_name}</a>"
@@ -330,16 +307,14 @@ def welcome(msg):
     
     for m in msg.new_chat_members:
         if m.id == bot.get_me().id:
-            bot.send_message(group_id, "ربات با موفقیت به گروه اضافه شد\n\n"
-                                     "✅ ربات ادمین گروه است\n"
-                                     "✅ همه ادمین‌ها دسترسی کامل دارند")
+            bot.send_message(group_id, "ربات با موفقیت به گروه اضافه شد")
             return
         
         add_user(m.id, m.first_name)
         add_member(group_id, m.id)
         
         welcome_text = get_welcome(group_id)
-        welcome_text = welcome_text.replace('{user}', get_user_mention(m))
+        welcome_text = welcome_text.replace('{user}', f"<a href='tg://user?id={m.id}'>{m.first_name}</a>")
         welcome_text = welcome_text.replace('{time}', get_time())
         welcome_text = welcome_text.replace('{date}', get_date())
         
@@ -354,7 +329,7 @@ def member_left(msg):
     except:
         pass
 
-# ===== فیلتر محتوا =====
+# ===== فیلتر محتوا (فقط برای کاربران عادی) =====
 @bot.message_handler(func=lambda m: m.chat.type in ['group', 'supergroup'], content_types=['text', 'photo', 'video', 'audio', 'voice', 'document', 'sticker', 'animation'])
 def filter_content(msg):
     group_id = msg.chat.id
@@ -364,8 +339,12 @@ def filter_content(msg):
     add_member(group_id, user_id)
     add_msg(group_id, user_id)
     
-    # اگه کاربر ادمین گروه باشه (حتی با حالت ناشناس)، فیلتر نمیشه
+    # اگه کاربر ادمین باشه، فیلتر نمیشه
     if is_group_admin(group_id, user_id):
+        return
+    
+    # اگه پیام متنی هست و دستور هست، فیلتر نشه
+    if msg.text and msg.text.startswith(('بن', 'رفع بن', 'سکوت', 'رفع سکوت', 'پین', 'حذف پین', 'اخطار', 'پاک‌سازی', 'پنل', 'آمار', 'راهنما', 'تگ همه', 'تنظیم خوشامد', 'تنظیم اخطار', 'گزارش')):
         return
     
     content_type = None
@@ -405,17 +384,16 @@ def filter_content(msg):
         filter_name = 'filter_forward'
         content_type = 'فوروارد'
     
-    if filter_name:
-        if get_filter_setting(group_id, filter_name):
-            try:
-                bot.delete_message(group_id, msg.message_id)
-                bot.send_message(
-                    group_id,
-                    f"⛔ {get_user_link(msg.from_user)} ارسال {content_type} در گروه ممنوع است",
-                    parse_mode='HTML'
-                )
-            except:
-                pass
+    if filter_name and get_filter_setting(group_id, filter_name):
+        try:
+            bot.delete_message(group_id, msg.message_id)
+            bot.send_message(
+                group_id,
+                f"⛔ {get_user_link(msg.from_user)} ارسال {content_type} در گروه ممنوع است",
+                parse_mode='HTML'
+            )
+        except:
+            pass
 
 # ===== هندلر اصلی پیام‌ها =====
 @bot.message_handler(func=lambda m: m.chat.type in ['group', 'supergroup'], content_types=['text'])
@@ -428,7 +406,6 @@ def handle(msg):
     add_member(group_id, user_id)
     add_msg(group_id, user_id)
     
-    # بررسی ادمین بودن در گروه (حتی با حالت ناشناس)
     admin = is_group_admin(group_id, user_id)
     
     # ===== کاربر عادی =====
@@ -548,7 +525,6 @@ def handle(msg):
     if text == 'تگ همه':
         try:
             all_members = []
-            
             admins = bot.get_chat_administrators(group_id)
             for a in admins:
                 if not a.user.is_bot:
@@ -704,7 +680,6 @@ def callback(call):
     user_id = call.from_user.id
     group_id = call.message.chat.id
     
-    # فقط ادمین‌های گروه (حتی با حالت ناشناس)
     if not is_group_admin(group_id, user_id):
         return bot.answer_callback_query(call.id, "فقط ادمین‌ها")
     
@@ -739,7 +714,6 @@ def callback(call):
     elif data == 'tagall':
         try:
             all_members = []
-            
             admins = bot.get_chat_administrators(group_id)
             for a in admins:
                 if not a.user.is_bot:
@@ -765,7 +739,6 @@ def callback(call):
             
             msg_text = f"🔔 تگ همه کاربران\n\n"
             msg_text += " ".join(all_members[:50])
-            
             bot.send_message(group_id, msg_text, parse_mode='HTML')
             
             if len(all_members) > 50:
@@ -779,8 +752,7 @@ def callback(call):
     
     elif data == 'filters':
         bot.edit_message_text(
-            "🔧 تنظیمات فیلترها\n\n"
-            "روی هر دکمه کلیک کنید تا فعال/غیرفعال شود",
+            "🔧 تنظیمات فیلترها\n\nروی هر دکمه کلیک کنید تا فعال/غیرفعال شود",
             group_id, call.message.message_id,
             reply_markup=filters_keyboard(group_id)
         )
@@ -905,7 +877,6 @@ if __name__ == '__main__':
     print(f"نام کاربری: @{bot.get_me().username}")
     print("=" * 50)
     print("✅ ربات شروع به کار کرد...")
-    print("✅ پشتیبانی از حالت ناشناس ادمین‌ها")
     print("=" * 50)
     
     while True:
