@@ -224,7 +224,6 @@ def start(msg):
             )
         )
 
-# ===== خوش‌آمدگویی =====
 @bot.message_handler(content_types=['new_chat_members'])
 def welcome(msg):
     group_id = msg.chat.id
@@ -249,7 +248,6 @@ def welcome(msg):
         
         bot.send_message(group_id, welcome_text, parse_mode='HTML')
 
-# ===== حذف پیام خروج =====
 @bot.message_handler(content_types=['left_chat_member'])
 def member_left(msg):
     group_id = msg.chat.id
@@ -270,7 +268,6 @@ def handle(msg):
     
     admin = is_admin(user_id) or is_group_admin(group_id, user_id)
     
-    # ===== کاربر عادی =====
     if not admin:
         if msg.reply_to_message and text == 'گزارش':
             reported = msg.reply_to_message.from_user
@@ -298,14 +295,10 @@ def handle(msg):
             bot.send_message(group_id, "✅ گزارش شما برای مدیران ارسال شد")
         return
     
-    # ===== دستورات ادمین =====
-    
-    # پنل
     if text == 'پنل':
         bot.send_message(group_id, "🛠 پنل مدیریت\n\nروی پیام کاربر ریپلای کنید", reply_markup=admin_keyboard())
         return
     
-    # آمار
     if text == 'آمار':
         top = get_top(group_id, 5)
         total = get_total_msgs(group_id)
@@ -328,7 +321,6 @@ def handle(msg):
         bot.send_message(group_id, t)
         return
     
-    # تنظیم خوش‌آمدگویی
     if text.startswith('تنظیم خوشامد'):
         new = text.replace('تنظیم خوشامد', '').strip()
         if new:
@@ -338,7 +330,6 @@ def handle(msg):
             bot.send_message(group_id, "❌ لطفاً متن را وارد کنید:\nتنظیم خوشامد سلام {user} عزیز!")
         return
     
-    # تنظیم تعداد اخطارها
     if text.startswith('تنظیم اخطار'):
         try:
             n = int(text.replace('تنظیم اخطار', '').strip())
@@ -351,7 +342,6 @@ def handle(msg):
             bot.send_message(group_id, "❌ لطفاً یک عدد معتبر وارد کنید:\nتنظیم اخطار 5")
         return
     
-    # راهنما
     if text == 'راهنما':
         help_text = (
             "📖 راهنمای ربات:\n\n"
@@ -383,18 +373,15 @@ def handle(msg):
     replied = msg.reply_to_message.from_user
     rid = replied.id
     
-    # ===== تگ همه کاربران =====
     if text == 'تگ همه':
         try:
             all_members = []
             
-            # گرفتن ادمین‌ها
             admins = bot.get_chat_administrators(group_id)
             for a in admins:
                 if not a.user.is_bot:
                     all_members.append(f"<a href='tg://user?id={a.user.id}'>{a.user.first_name}</a>")
             
-            # گرفتن اعضای عادی
             try:
                 offset = 0
                 while len(all_members) < 50:
@@ -431,7 +418,6 @@ def handle(msg):
             bot.send_message(group_id, f"❌ خطا: {e}")
         return
     
-    # ===== بن =====
     if text == 'بن':
         if rid == user_id:
             bot.send_message(group_id, "❌ نمی‌توانید خود را بن کنید")
@@ -445,7 +431,6 @@ def handle(msg):
         except Exception as e:
             bot.send_message(group_id, f"❌ خطا: {e}")
     
-    # ===== رفع بن =====
     elif text == 'رفع بن':
         try:
             bot.unban_chat_member(group_id, rid)
@@ -453,7 +438,6 @@ def handle(msg):
         except Exception as e:
             bot.send_message(group_id, f"❌ خطا: {e}")
     
-    # ===== سکوت =====
     elif text.startswith('سکوت'):
         if rid == user_id:
             bot.send_message(group_id, "❌ نمی‌توانید خود را سکوت کنید")
@@ -481,7 +465,6 @@ def handle(msg):
         except Exception as e:
             bot.send_message(group_id, f"❌ خطا: {e}")
     
-    # ===== رفع سکوت =====
     elif text == 'رفع سکوت':
         try:
             bot.restrict_chat_member(group_id, rid, can_send_messages=True, can_send_media_messages=True)
@@ -489,7 +472,6 @@ def handle(msg):
         except Exception as e:
             bot.send_message(group_id, f"❌ خطا: {e}")
     
-    # ===== پین =====
     elif text == 'پین':
         try:
             bot.pin_chat_message(group_id, msg.reply_to_message.message_id)
@@ -497,7 +479,6 @@ def handle(msg):
         except Exception as e:
             bot.send_message(group_id, f"❌ خطا: {e}")
     
-    # ===== حذف پین =====
     elif text == 'حذف پین':
         try:
             bot.unpin_chat_message(group_id)
@@ -505,7 +486,6 @@ def handle(msg):
         except Exception as e:
             bot.send_message(group_id, f"❌ خطا: {e}")
     
-    # ===== اخطار =====
     elif text == 'اخطار':
         if rid == user_id:
             bot.send_message(group_id, "❌ نمی‌توانید به خود اخطار دهید")
@@ -528,7 +508,6 @@ def handle(msg):
             remaining = max_w - warns
             bot.send_message(group_id, f"⚠️ اخطار {warns} از {max_w} برای {get_user_link(replied)}\n{remaining} اخطار تا بن شدن", parse_mode='HTML')
     
-    # ===== پاک‌سازی =====
     elif text == 'پاک‌سازی':
         clear_warn(group_id, rid)
         bot.send_message(group_id, f"✅ اخطارهای {get_user_link(replied)} پاک شد", parse_mode='HTML')
