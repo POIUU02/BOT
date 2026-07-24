@@ -1,2 +1,2 @@
-pyTelegramBotAPI
-jdatetime
+pyTelegramBotAPI==4.13.0
+jdatetime==4.1.0
