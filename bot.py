@@ -5,6 +5,7 @@ import os
 import sqlite3
 import time
 import re
+import threading
 from datetime import datetime
 import jdatetime
 import telebot
@@ -21,9 +22,11 @@ bot.parse_mode = 'HTML'
 conn = sqlite3.connect('bot.db', check_same_thread=False)
 c = conn.cursor()
 
+# جدول گروه‌ها با اطلاعات کامل
 c.execute('''
     CREATE TABLE IF NOT EXISTS groups (
         group_id INTEGER PRIMARY KEY,
+        title TEXT,
         welcome_text TEXT,
         max_warnings INTEGER DEFAULT 3,
         filter_link INTEGER DEFAULT 0,
@@ -33,7 +36,22 @@ c.execute('''
         filter_photo INTEGER DEFAULT 0,
         filter_video INTEGER DEFAULT 0,
         filter_audio INTEGER DEFAULT 0,
-        filter_voice INTEGER DEFAULT 0
+        filter_voice INTEGER DEFAULT 0,
+        added_date TEXT,
+        last_check TEXT
+    )
+''')
+
+# جدول ادمین‌های گروه
+c.execute('''
+    CREATE TABLE IF NOT EXISTS group_admins (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        group_id INTEGER,
+        user_id INTEGER,
+        username TEXT,
+        first_name TEXT,
+        is_owner INTEGER DEFAULT 0,
+        UNIQUE(group_id, user_id)
     )
 ''')
 
@@ -70,6 +88,60 @@ c.execute('''
 conn.commit()
 
 # ===== توابع دیتابیس =====
+def save_group(group_id, title):
+    c.execute('''
+        INSERT OR REPLACE INTO groups (group_id, title, added_date, last_check)
+        VALUES (?, ?, ?, ?)
+    ''', (group_id, title, str(datetime.now()), str(datetime.now())))
+    conn.commit()
+    print(f"✅ گروه {title} ({group_id}) ذخیره شد")
+
+def get_all_groups():
+    c.execute('SELECT group_id, title FROM groups')
+    return c.fetchall()
+
+def update_group_admins(group_id):
+    try:
+        admins = bot.get_chat_administrators(group_id)
+        c.execute('DELETE FROM group_admins WHERE group_id = ?', (group_id,))
+        
+        for admin in admins:
+            user = admin.user
+            is_owner = 1 if admin.status == 'creator' else 0
+            c.execute('''
+                INSERT INTO group_admins (group_id, user_id, username, first_name, is_owner)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (group_id, user.id, user.username, user.first_name, is_owner))
+            
+            c.execute('INSERT OR IGNORE INTO users (user_id, name) VALUES (?, ?)', 
+                     (user.id, user.first_name))
+        
+        conn.commit()
+        c.execute('UPDATE groups SET last_check = ? WHERE group_id = ?', 
+                 (str(datetime.now()), group_id))
+        conn.commit()
+        print(f"✅ ادمین‌های گروه {group_id} به‌روزرسانی شدند ({len(admins)} نفر)")
+        return True
+    except Exception as e:
+        print(f"❌ خطا در به‌روزرسانی ادمین‌های گروه {group_id}: {e}")
+        return False
+
+def is_group_admin_db(group_id, user_id):
+    try:
+        c.execute('SELECT id FROM group_admins WHERE group_id = ? AND user_id = ?', 
+                 (group_id, user_id))
+        return bool(c.fetchone())
+    except:
+        return False
+
+def is_group_owner_db(group_id, user_id):
+    try:
+        c.execute('SELECT id FROM group_admins WHERE group_id = ? AND user_id = ? AND is_owner = 1', 
+                 (group_id, user_id))
+        return bool(c.fetchone())
+    except:
+        return False
+
 def get_welcome(group_id):
     c.execute('SELECT welcome_text FROM groups WHERE group_id = ?', (group_id,))
     r = c.fetchone()
@@ -158,40 +230,39 @@ def debug_log(message, title="📝 درخواست جدید"):
         group_id = message.chat.id
         group_title = message.chat.title
         
-        # تشخیص ناشناس
         is_anon = False
-        real_user_id = None
-        real_user_name = None
-        
         if message.sender_chat:
             is_anon = True
-            real_user_id = message.sender_chat.id
-            real_user_name = message.sender_chat.title or 'ناشناس'
         elif message.from_user and hasattr(message.from_user, 'is_anonymous'):
             if message.from_user.is_anonymous:
                 is_anon = True
-                real_user_id = message.from_user.id
-                real_user_name = 'ناشناس'
-        else:
-            real_user_id = message.from_user.id
-            real_user_name = message.from_user.first_name
         
         if is_anon:
+            user_id = message.sender_chat.id if message.sender_chat else 0
+            user_name = message.sender_chat.title if message.sender_chat else 'ناشناس'
+            username = 'ناشناس'
             user_type = '🕵️ ناشناس'
-        elif real_user_id == ADMIN_ID:
-            user_type = '👑 ادمین اصلی'
-        elif is_group_admin(group_id, real_user_id):
-            user_type = '🛡️ ادمین گروه'
         else:
-            user_type = '👤 کاربر عادی'
+            user_id = message.from_user.id
+            user_name = message.from_user.first_name
+            username = message.from_user.username or 'ندارد'
+            
+            if user_id == ADMIN_ID:
+                user_type = '👑 ادمین اصلی'
+            elif is_group_admin_db(group_id, user_id):
+                user_type = '🛡️ ادمین گروه'
+            elif is_group_owner_db(group_id, user_id):
+                user_type = '👑 مالک گروه'
+            else:
+                user_type = '👤 کاربر عادی'
         
         text = message.text if message.text else '[غیرمتنی]'
         
         print("=" * 70)
         print(f"{title}")
         print("=" * 70)
-        print(f"📱 کاربر: {real_user_name}")
-        print(f"🆔 آیدی: {real_user_id}")
+        print(f"📱 کاربر: {user_name}")
+        print(f"🆔 آیدی: {user_id}")
         print(f"👤 نقش: {user_type}")
         print(f"🏠 گروه: {group_title} ({group_id})")
         print(f"📝 متن: {text[:200]}{'...' if len(text) > 200 else ''}")
@@ -201,8 +272,8 @@ def debug_log(message, title="📝 درخواست جدید"):
         print("=" * 70)
         
         return {
-            'user_id': real_user_id,
-            'user_name': real_user_name,
+            'user_id': user_id,
+            'user_name': user_name,
             'is_anon': is_anon,
             'user_type': user_type,
             'text': text
@@ -215,12 +286,11 @@ def debug_log(message, title="📝 درخواست جدید"):
 def is_admin(user_id):
     return user_id == ADMIN_ID
 
-def is_group_admin(group_id, user_id):
-    try:
-        m = bot.get_chat_member(group_id, user_id)
-        return m.status in ['administrator', 'creator']
-    except:
-        return False
+def is_group_admin_or_owner(group_id, user_id):
+    """بررسی ادمین یا مالک بودن کاربر در گروه"""
+    if is_admin(user_id):
+        return True
+    return is_group_admin_db(group_id, user_id) or is_group_owner_db(group_id, user_id)
 
 def is_anonymous(message):
     try:
@@ -235,16 +305,19 @@ def is_anonymous(message):
 
 def get_user_id(message):
     try:
-        if message.sender_chat:
-            return message.sender_chat.id
+        if is_anonymous(message):
+            if message.sender_chat:
+                return message.sender_chat.id
         return message.from_user.id
     except:
         return 0
 
 def get_user_name(message):
     try:
-        if message.sender_chat:
-            return message.sender_chat.title or 'ناشناس'
+        if is_anonymous(message):
+            if message.sender_chat:
+                return message.sender_chat.title or 'ناشناس'
+            return 'ناشناس'
         return message.from_user.first_name or 'کاربر'
     except:
         return 'ناشناس'
@@ -273,6 +346,20 @@ def get_user_mention(user):
     if user.username:
         return f"@{user.username}"
     return f"<a href='tg://user?id={user.id}'>{user.first_name}</a>"
+
+# ===== تابع بررسی خودکار ادمین‌ها =====
+def auto_update_admins():
+    while True:
+        try:
+            print("🔄 شروع به‌روزرسانی خودکار ادمین‌ها...")
+            groups = get_all_groups()
+            for group_id, title in groups:
+                update_group_admins(group_id)
+            print(f"✅ به‌روزرسانی خودکار کامل شد ({len(groups)} گروه)")
+            time.sleep(3600)  # هر 1 ساعت
+        except Exception as e:
+            print(f"❌ خطا در به‌روزرسانی خودکار: {e}")
+            time.sleep(300)
 
 # ===== کیبوردها =====
 def admin_keyboard():
@@ -366,11 +453,19 @@ def start(msg):
             )
         )
 
-# ===== خوش‌آمدگویی =====
+# ===== خوش‌آمدگویی و ذخیره گروه =====
 @bot.message_handler(content_types=['new_chat_members'])
 def welcome(msg):
-    debug_log(msg, "🎉 عضو جدید")
     group_id = msg.chat.id
+    group_title = msg.chat.title
+    
+    # ذخیره گروه
+    save_group(group_id, group_title)
+    
+    # به‌روزرسانی ادمین‌ها
+    update_group_admins(group_id)
+    
+    debug_log(msg, "🎉 عضو جدید")
     
     try:
         bot.delete_message(group_id, msg.message_id)
@@ -405,18 +500,16 @@ def member_left(msg):
 # ===== فیلتر کردن پیام‌ها =====
 @bot.message_handler(func=lambda m: m.chat.type in ['group', 'supergroup'], content_types=['text', 'photo', 'video', 'audio', 'voice', 'document', 'sticker', 'animation'])
 def filter_messages(msg):
+    debug_log(msg, "🔍 بررسی فیلتر")
     group_id = msg.chat.id
     user_id = get_user_id(msg)
     user_name = get_user_name(msg)
-    
-    # دیباگ
-    debug_log(msg, "🔍 بررسی فیلتر")
     
     if user_id == 0:
         return
     
     # ادمین‌ها و ناشناس‌ها از فیلتر عبور می‌کنن
-    if is_admin(user_id) or is_group_admin(group_id, user_id) or is_anonymous(msg):
+    if is_admin(user_id) or is_group_admin_or_owner(group_id, user_id) or is_anonymous(msg):
         print(f"✅ {user_name} - رد شدن از فیلتر (ادمین/ناشناس)")
         return
     
@@ -424,44 +517,29 @@ def filter_messages(msg):
     should_delete = False
     reason = ""
     
-    # بررسی لینک
     if settings['link'] and msg.text:
         link_pattern = r'(https?://\S+)|(t\.me/\S+)|(telegram\.me/\S+)|(@\w+)'
         if re.search(link_pattern, msg.text, re.IGNORECASE):
             should_delete = True
             reason = "ارسال لینک ممنوع است"
-    
-    # بررسی فوروارد
     elif settings['forward'] and msg.forward_date:
         should_delete = True
         reason = "فوروارد پیام ممنوع است"
-    
-    # بررسی گیف
     elif settings['gif'] and msg.animation:
         should_delete = True
         reason = "ارسال گیف ممنوع است"
-    
-    # بررسی استیکر
     elif settings['sticker'] and msg.sticker:
         should_delete = True
         reason = "ارسال استیکر ممنوع است"
-    
-    # بررسی عکس
     elif settings['photo'] and msg.photo:
         should_delete = True
         reason = "ارسال عکس ممنوع است"
-    
-    # بررسی ویدیو
     elif settings['video'] and msg.video:
         should_delete = True
         reason = "ارسال ویدیو ممنوع است"
-    
-    # بررسی آهنگ
     elif settings['audio'] and msg.audio:
         should_delete = True
         reason = "ارسال آهنگ ممنوع است"
-    
-    # بررسی ویس
     elif settings['voice'] and msg.voice:
         should_delete = True
         reason = "ارسال ویس ممنوع است"
@@ -476,7 +554,6 @@ def filter_messages(msg):
                 parse_mode='HTML'
             )
             
-            # اخطار خودکار
             max_w = get_max_warn(group_id)
             warns = add_warn(group_id, user_id)
             
@@ -509,7 +586,6 @@ def handle_all_messages(msg):
     if msg.chat.type not in ['group', 'supergroup']:
         return
     
-    # دیباگ کامل
     debug_info = debug_log(msg, "📩 دستور دریافتی")
     if not debug_info:
         return
@@ -521,14 +597,14 @@ def handle_all_messages(msg):
     user_type = debug_info['user_type']
     text = msg.text.strip() if msg.text else ""
     
-    # ذخیره کاربر (فقط برای کاربران واقعی)
-    if not is_anon and user_id > 0:
+    # ذخیره کاربر
+    if not is_anon:
         add_user(user_id, msg.from_user.first_name if msg.from_user else 'ناشناس')
         add_member(group_id, user_id)
         add_msg(group_id, user_id)
     
-    # بررسی ادمین - ناشناس‌ها هم ادمین محسوب میشن
-    is_admin_user = is_admin(user_id) or is_group_admin(group_id, user_id) or is_anon
+    # بررسی ادمین (حتی برای ناشناس‌ها هم True برگردون)
+    is_admin_user = is_admin(user_id) or is_group_admin_or_owner(group_id, user_id) or is_anon
     
     # ===== کاربر عادی =====
     if not is_admin_user:
@@ -558,7 +634,7 @@ def handle_all_messages(msg):
             print(f"📋 گزارش جدید از {user_name}")
         return
     
-    # ===== دستورات ادمین =====
+    # ===== دستورات ادمین (حتی ناشناس) =====
     print(f"✅ دستور از {user_type}: {text}")
     
     # پنل
@@ -601,7 +677,7 @@ def handle_all_messages(msg):
             bot.send_message(group_id, "❌ لطفاً متن را وارد کنید:\nتنظیم خوشامد سلام {user} عزیز!")
         return
     
-    # تنظیم تعداد اخطارها (دستوری)
+    # تنظیم تعداد اخطارها
     if text.startswith('تنظیم اخطار'):
         try:
             n = int(text.replace('تنظیم اخطار', '').strip())
@@ -675,8 +751,8 @@ def handle_all_messages(msg):
         if replied_id == user_id:
             bot.send_message(group_id, "❌ نمی‌توانید خود را بن کنید")
             return
-        if is_group_admin(group_id, replied_id) or is_replied_anon:
-            bot.send_message(group_id, "❌ نمی‌توانید ادمین یا ناشناس را بن کنید")
+        if is_group_admin_or_owner(group_id, replied_id) or is_replied_anon:
+            bot.send_message(group_id, "❌ نمی‌توانید ادمین، مالک یا ناشناس را بن کنید")
             return
         try:
             bot.ban_chat_member(group_id, replied_id)
@@ -701,8 +777,8 @@ def handle_all_messages(msg):
         if replied_id == user_id:
             bot.send_message(group_id, "❌ نمی‌توانید خود را سکوت کنید")
             return
-        if is_group_admin(group_id, replied_id) or is_replied_anon:
-            bot.send_message(group_id, "❌ نمی‌توانید ادمین یا ناشناس را سکوت کنید")
+        if is_group_admin_or_owner(group_id, replied_id) or is_replied_anon:
+            bot.send_message(group_id, "❌ نمی‌توانید ادمین، مالک یا ناشناس را سکوت کنید")
             return
         
         minutes = 0
@@ -758,8 +834,8 @@ def handle_all_messages(msg):
         if replied_id == user_id:
             bot.send_message(group_id, "❌ نمی‌توانید به خود اخطار دهید")
             return
-        if is_group_admin(group_id, replied_id) or is_replied_anon:
-            bot.send_message(group_id, "❌ نمی‌توانید به ادمین یا ناشناس اخطار دهید")
+        if is_group_admin_or_owner(group_id, replied_id) or is_replied_anon:
+            bot.send_message(group_id, "❌ نمی‌توانید به ادمین، مالک یا ناشناس اخطار دهید")
             return
         
         max_w = get_max_warn(group_id)
@@ -792,8 +868,8 @@ def callback(call):
     
     print(f"🔘 دکمه: {data} از {user_id}")
     
-    if not is_admin(user_id) and not is_group_admin(group_id, user_id):
-        return bot.answer_callback_query(call.id, "فقط ادمین‌ها")
+    if not is_admin(user_id) and not is_group_admin_or_owner(group_id, user_id):
+        return bot.answer_callback_query(call.id, "فقط ادمین‌ها یا مالک گروه")
     
     # ===== تنظیم اخطار =====
     if data == 'warn_inc':
@@ -880,7 +956,6 @@ def callback(call):
     elif data == 'clearwarn':
         bot.answer_callback_query(call.id, "روی پیام ریپلای کنید و 'پاک‌سازی' بنویسید")
     
-    # ===== تگ همه =====
     elif data == 'tagall':
         try:
             admins = bot.get_chat_administrators(group_id)
@@ -897,7 +972,6 @@ def callback(call):
         except Exception as e:
             bot.answer_callback_query(call.id, f"خطا: {e}")
     
-    # ===== آمار =====
     elif data == 'stats':
         top = get_top(group_id, 5)
         total = get_total_msgs(group_id)
@@ -920,7 +994,6 @@ def callback(call):
         bot.edit_message_text(t, group_id, call.message.message_id)
         bot.answer_callback_query(call.id)
     
-    # ===== تنظیمات =====
     elif data == 'settings':
         bot.edit_message_text(
             "⚙️ تنظیمات گروه\n\n"
@@ -930,7 +1003,6 @@ def callback(call):
         )
         bot.answer_callback_query(call.id)
     
-    # ===== تنظیم خوش‌آمدگویی =====
     elif data == 'set_welcome':
         bot.edit_message_text(
             "تنظیم متن خوش‌آمدگویی\n\n"
@@ -940,7 +1012,6 @@ def callback(call):
         )
         bot.answer_callback_query(call.id)
     
-    # ===== تنظیم اخطارها =====
     elif data == 'set_warnings':
         current = get_max_warn(group_id)
         bot.edit_message_text(
@@ -950,7 +1021,6 @@ def callback(call):
         )
         bot.answer_callback_query(call.id)
     
-    # ===== بازگشت =====
     elif data == 'back_main':
         bot.edit_message_text(
             "🛠 پنل مدیریت",
@@ -959,7 +1029,6 @@ def callback(call):
         )
         bot.answer_callback_query(call.id)
     
-    # ===== toggle فیلترها =====
     elif data.startswith('toggle_'):
         filter_name = data.replace('toggle_', '')
         toggle_filter(group_id, filter_name)
@@ -971,7 +1040,6 @@ def callback(call):
         )
         bot.answer_callback_query(call.id, f"✅ فیلتر {filter_name} تغییر کرد")
     
-    # ===== گزارش =====
     elif data.startswith('res_'):
         report_id = int(data.replace('res_', ''))
         upd_report(report_id, 'resolved')
@@ -987,24 +1055,28 @@ def callback(call):
 # ===== اجرا =====
 if __name__ == '__main__':
     print("=" * 70)
-    print("🤖 ربات مدیریت گروه - با دیباگ کامل")
+    print("🤖 ربات مدیریت گروه - نسخه کامل")
     print("=" * 70)
     print(f"👑 ادمین اصلی: {ADMIN_ID}")
     print(f"📱 نام کاربری: @{bot.get_me().username}")
     print("=" * 70)
-    print("📊 دیباگ فعال است - همه درخواست‌ها لاگ می‌شوند")
-    print("=" * 70)
     print("✅ قابلیت‌ها:")
-    print("• تشخیص مدیران گروه")
-    print("• تشخیص حالت ناشناس")
+    print("• ذخیره خودکار گروه در دیتابیس")
+    print("• بررسی خودکار ادمین‌های گروه")
+    print("• تشخیص ناشناس و پاسخگویی")
     print("• قفل لینک، گیف، استیکر، فوروارد، عکس، ویدیو، آهنگ، ویس")
     print("• تنظیم اخطار با دکمه (+1, -1, +3, -3)")
     print("• سیستم اخطار و بن خودکار")
-    print("• سیستم گزارش")
+    print("• سیستم گزارش با تگ ادمین‌ها")
     print("• تگ همه کاربران")
     print("=" * 70)
-    print("📝 منتظر درخواست‌ها...")
+    print("📝 دیباگ فعال است...")
     print("-" * 70)
+    
+    # شروع ترد به‌روزرسانی خودکار ادمین‌ها
+    admin_thread = threading.Thread(target=auto_update_admins, daemon=True)
+    admin_thread.start()
+    print("✅ ترد به‌روزرسانی خودکار ادمین‌ها شروع شد")
     
     try:
         bot.infinity_polling(timeout=10)
