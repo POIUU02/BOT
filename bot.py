@@ -12,7 +12,7 @@ import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 # ===== توکن =====
-BOT_TOKEN = "8092823571:AAHnuu9ff32CUSQe1p9axBlmvHXKJ4WCGW4"
+BOT_TOKEN = "8379881886:AAGdyC9nTmqfntcaM0zfmvatOzSKYntLNVs"
 
 if not BOT_TOKEN:
     print("❌ توکن ربات پیدا نشد!")
