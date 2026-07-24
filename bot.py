@@ -11,7 +11,7 @@ import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 # ===== توکن =====
-BOT_TOKEN = "8379881886:AAHi3knG32h9Q1fxEsXp6sSSvqyQEBRkh-M"
+BOT_TOKEN = "8379881886:AAH3qx-KKc0Oym1tOwXWCbnNU97COVCqtFk"
 ADMIN_ID = 6443963679
 
 bot = telebot.TeleBot(BOT_TOKEN)
