@@ -166,6 +166,49 @@ def upd_report(report_id, status):
     c.execute('UPDATE reports SET status = ? WHERE id = ?', (status, report_id))
     conn.commit()
 
+# ===== دیباگ =====
+def debug_log(message, title="📝 درخواست جدید"):
+    """لاگ کردن درخواست‌ها با جزئیات کامل"""
+    try:
+        group_id = message.chat.id
+        user_id = message.from_user.id if message.from_user else 0
+        user_name = message.from_user.first_name if message.from_user else "ناشناس"
+        username = message.from_user.username if message.from_user and message.from_user.username else "ندارد"
+        text = message.text if message.text else "[غیرمتنی]"
+        
+        # تشخیص نوع کاربر
+        user_type = "👤 کاربر عادی"
+        
+        if user_id == ADMIN_ID:
+            user_type = "👑 ادمین اصلی"
+        elif is_user_owner(user_id):
+            user_type = "👑 مالک گروه"
+        elif is_group_admin_or_creator(group_id, user_id):
+            user_type = "🛡️ ادمین گروه"
+        
+        # تشخیص حالت ناشناس
+        is_anon = is_anonymous_message(message)
+        if is_anon:
+            user_type = "🕵️ ناشناس"
+            user_name = "ناشناس"
+            user_id = "????"
+        
+        # لاگ
+        print("=" * 60)
+        print(f"{title}")
+        print("=" * 60)
+        print(f"📱 کاربر: {user_name} (@{username})")
+        print(f"🆔 آیدی: {user_id}")
+        print(f"👤 نقش: {user_type}")
+        print(f"🏠 گروه: {message.chat.title} ({group_id})")
+        print(f"📝 متن: {text[:100]}{'...' if len(text) > 100 else ''}")
+        print(f"🕐 زمان: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"🔄 ناشناس: {'✅' if is_anon else '❌'}")
+        print(f"📎 ریپلای: {'✅' if message.reply_to_message else '❌'}")
+        print("=" * 60)
+    except Exception as e:
+        print(f"❌ خطا در دیباگ: {e}")
+
 # ===== توابع کمکی =====
 def is_admin(user_id):
     return user_id == ADMIN_ID
@@ -223,10 +266,8 @@ def get_user_link(user):
 def is_anonymous_message(message):
     """بررسی اینکه پیام از حالت ناشناس ارسال شده"""
     try:
-        # بررسی sender_chat (حالت ناشناس در سوپرگروه‌ها)
         if message.sender_chat:
             return True
-        # بررسی is_anonymous
         if message.from_user and hasattr(message.from_user, 'is_anonymous'):
             if message.from_user.is_anonymous:
                 return True
@@ -311,6 +352,7 @@ def report_keyboard(report_id):
 # ===== دستورات =====
 @bot.message_handler(commands=['start'])
 def start(msg):
+    debug_log(msg, "🚀 استارت ربات")
     if msg.chat.type == 'private':
         bot.send_message(msg.chat.id, 
             "به ربات مدیریت گروه خوش آمدید\n\n"
@@ -323,6 +365,7 @@ def start(msg):
 # ===== خوش‌آمدگویی و تشخیص مالک =====
 @bot.message_handler(content_types=['new_chat_members'])
 def welcome(msg):
+    debug_log(msg, "🎉 عضو جدید")
     group_id = msg.chat.id
     
     try:
@@ -341,6 +384,7 @@ def welcome(msg):
         # بررسی مالک گروه
         if is_group_creator(group_id, m.id):
             set_user_owner(m.id)
+            print(f"👑 مالک گروه شناسایی شد: {m.first_name} ({m.id})")
         
         welcome_text = get_welcome(group_id)
         welcome_text = welcome_text.replace('{user}', get_user_mention(m))
@@ -351,6 +395,7 @@ def welcome(msg):
 
 @bot.message_handler(content_types=['left_chat_member'])
 def member_left(msg):
+    debug_log(msg, "🚪 خروج عضو")
     group_id = msg.chat.id
     try:
         bot.delete_message(group_id, msg.message_id)
@@ -362,9 +407,12 @@ def member_left(msg):
 def filter_messages(msg):
     group_id = msg.chat.id
     
+    # دیباگ
+    debug_log(msg, "🔍 بررسی فیلتر")
+    
     # تشخیص فرستنده واقعی در حالت ناشناس
     if is_anonymous_message(msg):
-        # پیام از حالت ناشناس - نباید فیلتر بشه چون مالک یا ادمین میتونه باشه
+        print("🕵️ پیام از حالت ناشناس - رد شدن از فیلتر")
         return
     
     user_id = msg.from_user.id if msg.from_user else 0
@@ -377,6 +425,7 @@ def filter_messages(msg):
     
     # اگر ادمین یا مالک باشه، فیلتر نمی‌شه
     if is_admin_user:
+        print(f"✅ کاربر {user_id} ادمین/مالک است - رد شدن از فیلتر")
         return
     
     # ذخیره آمار
@@ -432,6 +481,7 @@ def filter_messages(msg):
     
     # حذف پیام در صورت نیاز
     if should_delete:
+        print(f"🗑️ حذف پیام از {user_id} - دلیل: {reason}")
         try:
             bot.delete_message(group_id, msg.message_id)
             bot.send_message(
@@ -453,8 +503,9 @@ def filter_messages(msg):
                         f"🚫 کاربر {get_user_link(msg.from_user)} بعد از {max_w} اخطار بن شد",
                         parse_mode='HTML'
                     )
-                except:
-                    pass
+                    print(f"🚫 کاربر {user_id} بن شد")
+                except Exception as e:
+                    print(f"❌ خطا در بن: {e}")
             else:
                 remaining = max_w - warns
                 bot.send_message(
@@ -462,17 +513,20 @@ def filter_messages(msg):
                     f"⚠️ اخطار {warns} از {max_w} برای {get_user_link(msg.from_user)}\n{remaining} اخطار تا بن شدن",
                     parse_mode='HTML'
                 )
-        except:
-            pass
+                print(f"⚠️ اخطار {warns}/{max_w} برای {user_id}")
+        except Exception as e:
+            print(f"❌ خطا در حذف پیام: {e}")
 
 # ===== دستورات متنی =====
 @bot.message_handler(func=lambda m: m.chat.type in ['group', 'supergroup'], content_types=['text'])
 def handle(msg):
+    debug_log(msg, "📩 دستور دریافتی")
+    
     group_id = msg.chat.id
     
     # تشخیص فرستنده واقعی در حالت ناشناس
     if is_anonymous_message(msg):
-        # پیام از حالت ناشناس - باید دستورات رو قبول کنه
+        print("🕵️ دستور از حالت ناشناس - دسترسی کامل داده شد")
         user_id = ADMIN_ID  # برای دسترسی به دستورات
         is_admin_user = True
     else:
@@ -480,6 +534,7 @@ def handle(msg):
         if user_id == 0:
             return
         is_admin_user = is_admin(user_id) or is_group_admin_or_creator(group_id, user_id) or is_user_owner(user_id)
+        print(f"👤 کاربر: {user_id} - ادمین: {is_admin_user}")
     
     text = msg.text.strip() if msg.text else ""
     
@@ -491,6 +546,7 @@ def handle(msg):
     
     # ===== کاربر عادی =====
     if not is_admin_user:
+        print(f"⛔ کاربر عادی - فقط گزارش")
         if msg.reply_to_message and text == 'گزارش':
             # تشخیص فرستنده گزارش شده در حالت ناشناس
             if is_anonymous_message(msg.reply_to_message):
@@ -522,9 +578,11 @@ def handle(msg):
                 reply_markup=report_keyboard(report_id)
             )
             bot.send_message(group_id, "✅ گزارش شما برای مدیران ارسال شد")
+            print(f"📋 گزارش جدید از {user_id}")
         return
     
     # ===== دستورات ادمین و مالک =====
+    print(f"✅ دستورات ادمین/مالک: {text}")
     
     # پنل
     if text == 'پنل':
@@ -618,6 +676,7 @@ def handle(msg):
     
     # ===== تگ همه کاربران =====
     if text == 'تگ همه':
+        print("🏷️ اجرای تگ همه")
         try:
             all_members = []
             
@@ -657,13 +716,16 @@ def handle(msg):
                 bot.send_message(group_id, f"✅ {len(all_members[:50])} کاربر از {len(all_members)} تگ شدند")
             else:
                 bot.send_message(group_id, f"✅ {len(all_members)} کاربر تگ شدند")
+            print(f"✅ تگ همه انجام شد - {len(all_members)} کاربر")
             
         except Exception as e:
             bot.send_message(group_id, f"❌ خطا: {e}")
+            print(f"❌ خطا در تگ همه: {e}")
         return
     
     # ===== دستورات مدیریتی =====
     if text == 'بن':
+        print(f"🚫 اجرای بن برای {rid}")
         if rid == user_id:
             bot.send_message(group_id, "❌ نمی‌توانید خود را بن کنید")
             return
@@ -673,8 +735,10 @@ def handle(msg):
         try:
             bot.ban_chat_member(group_id, rid)
             bot.send_message(group_id, f"🚫 کاربر {replied_name} بن شد", parse_mode='HTML')
+            print(f"✅ بن شد: {rid}")
         except Exception as e:
             bot.send_message(group_id, f"❌ خطا: {e}")
+            print(f"❌ خطا در بن: {e}")
     
     elif text == 'رفع بن':
         try:
@@ -762,6 +826,8 @@ def handle(msg):
 def callback(call):
     user_id = call.from_user.id
     group_id = call.message.chat.id
+    
+    print(f"🔘 دکمه: {call.data} از {user_id}")
     
     if not is_admin(user_id) and not is_group_admin_or_creator(group_id, user_id) and not is_user_owner(user_id):
         return bot.answer_callback_query(call.id, "فقط ادمین‌ها یا مالک گروه")
@@ -917,12 +983,14 @@ def callback(call):
 
 # ===== اجرا =====
 if __name__ == '__main__':
-    print("=" * 50)
-    print("ربات مدیریت گروه - نسخه کامل")
-    print("=" * 50)
-    print(f"ادمین اصلی: {ADMIN_ID}")
-    print(f"نام کاربری: @{bot.get_me().username}")
-    print("=" * 50)
+    print("=" * 60)
+    print("🤖 ربات مدیریت گروه - با دیباگ کامل")
+    print("=" * 60)
+    print(f"👑 ادمین اصلی: {ADMIN_ID}")
+    print(f"📱 نام کاربری: @{bot.get_me().username}")
+    print("=" * 60)
+    print("📊 دیباگ فعال است - همه درخواست‌ها لاگ می‌شوند")
+    print("=" * 60)
     print("✅ قابلیت‌ها:")
     print("• تشخیص ادمین‌ها و مالک گروه")
     print("• تشخیص حالت ناشناس")
@@ -931,7 +999,9 @@ if __name__ == '__main__':
     print("• سیستم اخطار و بن خودکار")
     print("• سیستم گزارش")
     print("• تگ همه کاربران")
-    print("=" * 50)
+    print("=" * 60)
+    print("📝 لاگ‌ها:")
+    print("-" * 60)
     
     try:
         bot.infinity_polling(timeout=10)
