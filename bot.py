@@ -10,7 +10,7 @@ import jdatetime
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-# ===== توکن جدید =====
+# ===== توکن =====
 BOT_TOKEN = "8379881886:AAH3qx-KKc0Oym1tOwXWCbnNU97COVCqtFk"
 ADMIN_ID = 6443963679
 
@@ -154,44 +154,44 @@ def upd_report(report_id, status):
 
 # ===== دیباگ =====
 def debug_log(message, title="📝 درخواست جدید"):
-    """لاگ کامل برای دیباگ"""
     try:
         group_id = message.chat.id
         group_title = message.chat.title
         
         # تشخیص ناشناس
         is_anon = False
+        real_user_id = None
+        real_user_name = None
+        
         if message.sender_chat:
             is_anon = True
+            real_user_id = message.sender_chat.id
+            real_user_name = message.sender_chat.title or 'ناشناس'
         elif message.from_user and hasattr(message.from_user, 'is_anonymous'):
             if message.from_user.is_anonymous:
                 is_anon = True
+                real_user_id = message.from_user.id
+                real_user_name = 'ناشناس'
+        else:
+            real_user_id = message.from_user.id
+            real_user_name = message.from_user.first_name
         
         if is_anon:
-            user_id = message.sender_chat.id if message.sender_chat else 0
-            user_name = message.sender_chat.title if message.sender_chat else 'ناشناس'
-            username = 'ناشناس'
             user_type = '🕵️ ناشناس'
+        elif real_user_id == ADMIN_ID:
+            user_type = '👑 ادمین اصلی'
+        elif is_group_admin(group_id, real_user_id):
+            user_type = '🛡️ ادمین گروه'
         else:
-            user_id = message.from_user.id
-            user_name = message.from_user.first_name
-            username = message.from_user.username or 'ندارد'
-            
-            # تشخیص نوع کاربر
-            if user_id == ADMIN_ID:
-                user_type = '👑 ادمین اصلی'
-            elif is_group_admin(group_id, user_id):
-                user_type = '🛡️ ادمین گروه'
-            else:
-                user_type = '👤 کاربر عادی'
+            user_type = '👤 کاربر عادی'
         
         text = message.text if message.text else '[غیرمتنی]'
         
         print("=" * 70)
         print(f"{title}")
         print("=" * 70)
-        print(f"📱 کاربر: {user_name}")
-        print(f"🆔 آیدی: {user_id}")
+        print(f"📱 کاربر: {real_user_name}")
+        print(f"🆔 آیدی: {real_user_id}")
         print(f"👤 نقش: {user_type}")
         print(f"🏠 گروه: {group_title} ({group_id})")
         print(f"📝 متن: {text[:200]}{'...' if len(text) > 200 else ''}")
@@ -201,8 +201,8 @@ def debug_log(message, title="📝 درخواست جدید"):
         print("=" * 70)
         
         return {
-            'user_id': user_id,
-            'user_name': user_name,
+            'user_id': real_user_id,
+            'user_name': real_user_name,
             'is_anon': is_anon,
             'user_type': user_type,
             'text': text
@@ -235,19 +235,16 @@ def is_anonymous(message):
 
 def get_user_id(message):
     try:
-        if is_anonymous(message):
-            if message.sender_chat:
-                return message.sender_chat.id
+        if message.sender_chat:
+            return message.sender_chat.id
         return message.from_user.id
     except:
         return 0
 
 def get_user_name(message):
     try:
-        if is_anonymous(message):
-            if message.sender_chat:
-                return message.sender_chat.title or 'ناشناس'
-            return 'ناشناس'
+        if message.sender_chat:
+            return message.sender_chat.title or 'ناشناس'
         return message.from_user.first_name or 'کاربر'
     except:
         return 'ناشناس'
@@ -408,10 +405,12 @@ def member_left(msg):
 # ===== فیلتر کردن پیام‌ها =====
 @bot.message_handler(func=lambda m: m.chat.type in ['group', 'supergroup'], content_types=['text', 'photo', 'video', 'audio', 'voice', 'document', 'sticker', 'animation'])
 def filter_messages(msg):
-    debug_log(msg, "🔍 بررسی فیلتر")
     group_id = msg.chat.id
     user_id = get_user_id(msg)
     user_name = get_user_name(msg)
+    
+    # دیباگ
+    debug_log(msg, "🔍 بررسی فیلتر")
     
     if user_id == 0:
         return
@@ -522,13 +521,13 @@ def handle_all_messages(msg):
     user_type = debug_info['user_type']
     text = msg.text.strip() if msg.text else ""
     
-    # ذخیره کاربر
-    if not is_anon:
+    # ذخیره کاربر (فقط برای کاربران واقعی)
+    if not is_anon and user_id > 0:
         add_user(user_id, msg.from_user.first_name if msg.from_user else 'ناشناس')
         add_member(group_id, user_id)
         add_msg(group_id, user_id)
     
-    # بررسی ادمین
+    # بررسی ادمین - ناشناس‌ها هم ادمین محسوب میشن
     is_admin_user = is_admin(user_id) or is_group_admin(group_id, user_id) or is_anon
     
     # ===== کاربر عادی =====
