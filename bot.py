@@ -188,17 +188,6 @@ def upd_report(report_id, status):
     c.execute('UPDATE reports SET status = ? WHERE id = ?', (status, report_id))
     conn.commit()
 
-def get_report(report_id):
-    c.execute('SELECT * FROM reports WHERE id = ?', (report_id,))
-    return c.fetchone()
-
-def get_all_reports(group_id, status=None):
-    if status:
-        c.execute('SELECT * FROM reports WHERE group_id = ? AND status = ? ORDER BY id DESC', (group_id, status))
-    else:
-        c.execute('SELECT * FROM reports WHERE group_id = ? ORDER BY id DESC', (group_id,))
-    return c.fetchall()
-
 # ===== توابع کمکی =====
 def is_admin(user_id):
     return user_id == ADMIN_ID
@@ -229,35 +218,31 @@ def get_persian_date():
               'مهر', 'آبان', 'آذر', 'دی', 'بهمن', 'اسفند']
     return f"{weekdays[now.weekday()]} {now.day} {months[now.month-1]} {now.year}"
 
-def get_admins_id(group_id):
-    """دریافت لیست آیدی ادمین‌ها برای تگ مخفی"""
+def get_admins_mention(group_id):
+    mentions = []
     admin_ids = []
     try:
         admins = bot.get_chat_administrators(group_id)
         for a in admins:
             if not a.user.is_bot:
                 admin_ids.append(a.user.id)
+                if a.user.username:
+                    mentions.append(f"@{a.user.username}")
+                else:
+                    mentions.append(f"<a href='tg://user?id={a.user.id}'>{a.user.first_name}</a>")
     except:
         pass
-    # اضافه کردن ادمین اصلی
+    
     if ADMIN_ID not in admin_ids:
-        admin_ids.append(ADMIN_ID)
-    return admin_ids
-
-def get_admins_mention(group_id):
-    """دریافت لیست منشن ادمین‌ها برای تگ مخفی"""
-    mentions = []
-    admin_ids = get_admins_id(group_id)
-    for aid in admin_ids:
         try:
-            # تلاش برای دریافت اطلاعات کاربر
-            user = bot.get_chat_member(group_id, aid).user
+            user = bot.get_chat_member(group_id, ADMIN_ID).user
             if user.username:
                 mentions.append(f"@{user.username}")
             else:
-                mentions.append(f"<a href='tg://user?id={aid}'>{user.first_name}</a>")
+                mentions.append(f"<a href='tg://user?id={ADMIN_ID}'>{user.first_name}</a>")
         except:
-            mentions.append(f"<a href='tg://user?id={aid}'>ادمین</a>")
+            mentions.append(f"<a href='tg://user?id={ADMIN_ID}'>ادمین</a>")
+    
     return mentions
 
 def get_user_mention(user):
@@ -296,8 +281,7 @@ def admin_keyboard():
         InlineKeyboardButton("آمار", callback_data="stats")
     )
     kb.add(
-        InlineKeyboardButton("تنظیمات", callback_data="settings"),
-        InlineKeyboardButton("لیست گزارش‌ها", callback_data="reports_list")
+        InlineKeyboardButton("تنظیمات", callback_data="settings")
     )
     return kb
 
@@ -329,8 +313,8 @@ def lock_menu_keyboard(group_id):
 def report_keyboard(report_id):
     kb = InlineKeyboardMarkup(row_width=2)
     kb.add(
-        InlineKeyboardButton("بررسی شد", callback_data=f"res_{report_id}"),
-        InlineKeyboardButton("حذف", callback_data=f"del_{report_id}")
+        InlineKeyboardButton("✅ بررسی شد", callback_data=f"res_{report_id}"),
+        InlineKeyboardButton("🗑️ حذف", callback_data=f"del_{report_id}")
     )
     return kb
 
@@ -453,7 +437,6 @@ def handle(msg):
                 bot.send_message(group_id, "نمی‌توانید ادمین را گزارش کنید")
                 return
             
-            # دریافت دلیل گزارش (اختیاری)
             reason = "بدون دلیل"
             if len(msg.text.split()) > 1:
                 reason = msg.text.replace('گزارش', '').strip()
@@ -464,13 +447,12 @@ def handle(msg):
             admin_mentions = get_admins_mention(group_id)
             admin_text = " ".join(admin_mentions) if admin_mentions else ""
             
+            # پیام گزارش برای ادمین‌ها
             report_msg = f"{admin_text}\n\n" if admin_text else ""
             report_msg += f"📋 گزارش جدید\n\n"
             report_msg += f"👤 گزارش دهنده: {get_user_link(msg.from_user)}\n"
             report_msg += f"👤 گزارش شده: {get_user_link(reported)}\n"
-            report_msg += f"📝 دلیل: {reason}\n"
-            report_msg += f"📅 تاریخ: {get_persian_date()}\n"
-            report_msg += f"🆔 شناسه: #{report_id}"
+            report_msg += f"📝 دلیل: {reason}"
             
             bot.send_message(
                 group_id,
@@ -478,7 +460,9 @@ def handle(msg):
                 parse_mode='HTML',
                 reply_markup=report_keyboard(report_id)
             )
-            bot.send_message(group_id, "✅ گزارش شما برای مدیران ارسال شد")
+            
+            # پیام تایید برای کاربر عادی
+            bot.send_message(group_id, "• گزارش شما برای مدیران گروه ارسال شد!​")
         return
     
     # ===== دستورات ادمین =====
@@ -625,7 +609,7 @@ def handle(msg):
             "کاربران عادی:\n"
             "گزارش - گزارش پیام (با ریپلای)\n\n"
             "دستورات:\n"
-            "پنل - نمایش پنل مدیریت\n"
+            "پنل - نمایش پنل управления\n"
             "آمار - نمایش آمار\n"
             "راهنما - نمایش این راهنما\n"
             "تنظیم خوشامد متن - تنظیم متن اضافی خوش‌آمدگویی\n"
@@ -946,25 +930,6 @@ def callback(call):
             "تاریخ عضویت: {date}",
             group_id, call.message.message_id
         )
-        bot.answer_callback_query(call.id)
-    
-    elif data == 'reports_list':
-        reports = get_all_reports(group_id, 'pending')
-        if not reports:
-            bot.edit_message_text(
-                "📋 لیست گزارش‌ها\n\n"
-                "هیچ گزارش جدیدی وجود ندارد",
-                group_id, call.message.message_id
-            )
-        else:
-            text = "📋 لیست گزارش‌های جدید:\n\n"
-            for r in reports[:10]:
-                text += f"#{r[0]} - {r[6][:10]}\n"
-                text += f"گزارش دهنده: {r[2]}\n"
-                text += f"گزارش شده: {r[3]}\n"
-                text += f"دلیل: {r[5]}\n\n"
-            text += "برای مشاهده جزئیات روی دکمه گزارش کلیک کنید"
-            bot.edit_message_text(text, group_id, call.message.message_id)
         bot.answer_callback_query(call.id)
     
     elif data == 'back_main':
