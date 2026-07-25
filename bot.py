@@ -23,11 +23,16 @@ bot.parse_mode = 'HTML'
 
 # ===== دیتابیس =====
 conn = sqlite3.connect('bot.db', check_same_thread=False)
-db = conn  # alias برای راحتی
 c = conn.cursor()
 
+# حذف جدول‌های قدیمی و ساخت دوباره
+c.execute("DROP TABLE IF EXISTS groups")
+c.execute("DROP TABLE IF EXISTS users")
+c.execute("DROP TABLE IF EXISTS members")
+c.execute("DROP TABLE IF EXISTS reports")
+
 c.execute('''
-    CREATE TABLE IF NOT EXISTS groups (
+    CREATE TABLE groups (
         group_id INTEGER PRIMARY KEY,
         welcome_text TEXT,
         max_warnings INTEGER DEFAULT 3,
@@ -42,7 +47,7 @@ c.execute('''
 ''')
 
 c.execute('''
-    CREATE TABLE IF NOT EXISTS users (
+    CREATE TABLE users (
         user_id INTEGER PRIMARY KEY,
         name TEXT,
         join_date TEXT
@@ -50,18 +55,20 @@ c.execute('''
 ''')
 
 c.execute('''
-    CREATE TABLE IF NOT EXISTS members (
+    CREATE TABLE members (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         group_id INTEGER,
         user_id INTEGER,
         warnings INTEGER DEFAULT 0,
+        muted INTEGER DEFAULT 0,
+        banned INTEGER DEFAULT 0,
         messages INTEGER DEFAULT 0,
         UNIQUE(group_id, user_id)
     )
 ''')
 
 c.execute('''
-    CREATE TABLE IF NOT EXISTS reports (
+    CREATE TABLE reports (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         group_id INTEGER,
         reporter_id INTEGER,
@@ -73,36 +80,8 @@ c.execute('''
     )
 ''')
 
-try:
-    c.execute("ALTER TABLE groups ADD COLUMN lock_sticker INTEGER DEFAULT 0")
-except:
-    pass
-try:
-    c.execute("ALTER TABLE groups ADD COLUMN lock_gif INTEGER DEFAULT 0")
-except:
-    pass
-try:
-    c.execute("ALTER TABLE groups ADD COLUMN lock_voice INTEGER DEFAULT 0")
-except:
-    pass
-try:
-    c.execute("ALTER TABLE groups ADD COLUMN lock_video INTEGER DEFAULT 0")
-except:
-    pass
-try:
-    c.execute("ALTER TABLE groups ADD COLUMN lock_photo INTEGER DEFAULT 0")
-except:
-    pass
-try:
-    c.execute("ALTER TABLE groups ADD COLUMN lock_file INTEGER DEFAULT 0")
-except:
-    pass
-try:
-    c.execute("ALTER TABLE groups ADD COLUMN lock_all INTEGER DEFAULT 0")
-except:
-    pass
-
 conn.commit()
+print("✅ دیتابیس با موفقیت ساخته شد")
 
 # ===== توابع دیتابیس =====
 def get_welcome(group_id):
@@ -166,6 +145,19 @@ def add_warn(group_id, user_id):
 def clear_warn(group_id, user_id):
     c.execute('UPDATE members SET warnings = 0 WHERE group_id = ? AND user_id = ?', (group_id, user_id))
     conn.commit()
+
+def mute_user(group_id, user_id):
+    c.execute('UPDATE members SET muted = 1 WHERE group_id = ? AND user_id = ?', (group_id, user_id))
+    conn.commit()
+
+def unmute_user(group_id, user_id):
+    c.execute('UPDATE members SET muted = 0 WHERE group_id = ? AND user_id = ?', (group_id, user_id))
+    conn.commit()
+
+def is_muted(group_id, user_id):
+    c.execute('SELECT muted FROM members WHERE group_id = ? AND user_id = ?', (group_id, user_id))
+    r = c.fetchone()
+    return r[0] == 1 if r else False
 
 def get_top(group_id, limit=5):
     c.execute('''SELECT u.name, m.messages FROM members m 
@@ -685,13 +677,9 @@ def handle(msg):
             return
         
         # بررسی اینکه کاربر قبلاً سکوت هست یا نه
-        try:
-            member = bot.get_chat_member(group_id, rid)
-            if member.status == 'restricted' and not member.can_send_messages:
-                bot.send_message(group_id, f"ℹ️ کاربر {get_user_link(replied)} قبلاً سکوت است", parse_mode='HTML')
-                return
-        except:
-            pass
+        if is_muted(group_id, rid):
+            bot.send_message(group_id, f"ℹ️ کاربر {get_user_link(replied)} قبلاً سکوت است", parse_mode='HTML')
+            return
         
         minutes = 0
         parts = text.split()
@@ -705,13 +693,11 @@ def handle(msg):
             if minutes > 0:
                 until = int(time.time()) + (minutes * 60)
                 bot.restrict_chat_member(group_id, rid, can_send_messages=False, until_date=until)
-                conn.execute('UPDATE members SET muted = 1 WHERE group_id = ? AND user_id = ?', (group_id, rid))
-                conn.commit()
+                mute_user(group_id, rid)
                 bot.send_message(group_id, f"🔇 کاربر {get_user_link(replied)} به مدت {minutes} دقیقه سکوت شد", parse_mode='HTML')
             else:
                 bot.restrict_chat_member(group_id, rid, can_send_messages=False)
-                conn.execute('UPDATE members SET muted = 1 WHERE group_id = ? AND user_id = ?', (group_id, rid))
-                conn.commit()
+                mute_user(group_id, rid)
                 bot.send_message(group_id, f"🔇 کاربر {get_user_link(replied)} سکوت شد", parse_mode='HTML')
         except Exception as e:
             if "can't restrict self" in str(e):
@@ -726,30 +712,26 @@ def handle(msg):
             return
         
         # بررسی اینکه کاربر واقعاً سکوت هست یا نه
+        if not is_muted(group_id, rid):
+            bot.send_message(group_id, f"ℹ️ کاربر {get_user_link(replied)} سکوت نیست", parse_mode='HTML')
+            return
+        
         try:
-            member = bot.get_chat_member(group_id, rid)
-            if member.status == 'restricted' and not member.can_send_messages:
-                try:
-                    bot.restrict_chat_member(
-                        group_id, 
-                        rid, 
-                        can_send_messages=True, 
-                        can_send_media_messages=True,
-                        can_send_other_messages=True,
-                        can_add_web_page_previews=True
-                    )
-                    conn.execute('UPDATE members SET muted = 0 WHERE group_id = ? AND user_id = ?', (group_id, rid))
-                    conn.commit()
-                    bot.send_message(group_id, f"✅ سکوت کاربر {get_user_link(replied)} برداشته شد", parse_mode='HTML')
-                except Exception as e:
-                    if "can't restrict self" in str(e):
-                        bot.send_message(group_id, "❌ نمی‌توانید خود را رفع سکوت کنید")
-                    else:
-                        bot.send_message(group_id, f"❌ خطا: {e}")
-            else:
-                bot.send_message(group_id, f"ℹ️ کاربر {get_user_link(replied)} سکوت نیست", parse_mode='HTML')
+            bot.restrict_chat_member(
+                group_id, 
+                rid, 
+                can_send_messages=True, 
+                can_send_media_messages=True,
+                can_send_other_messages=True,
+                can_add_web_page_previews=True
+            )
+            unmute_user(group_id, rid)
+            bot.send_message(group_id, f"✅ سکوت کاربر {get_user_link(replied)} برداشته شد", parse_mode='HTML')
         except Exception as e:
-            bot.send_message(group_id, f"❌ خطا: {e}")
+            if "can't restrict self" in str(e):
+                bot.send_message(group_id, "❌ نمی‌توانید خود را رفع سکوت کنید")
+            else:
+                bot.send_message(group_id, f"❌ خطا: {e}")
     
     elif text == 'پین':
         try:
