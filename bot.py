@@ -23,6 +23,7 @@ bot.parse_mode = 'HTML'
 
 # ===== دیتابیس =====
 conn = sqlite3.connect('bot.db', check_same_thread=False)
+db = conn  # alias برای راحتی
 c = conn.cursor()
 
 c.execute('''
@@ -704,11 +705,13 @@ def handle(msg):
             if minutes > 0:
                 until = int(time.time()) + (minutes * 60)
                 bot.restrict_chat_member(group_id, rid, can_send_messages=False, until_date=until)
-                db.add_mute(group_id, rid)
+                conn.execute('UPDATE members SET muted = 1 WHERE group_id = ? AND user_id = ?', (group_id, rid))
+                conn.commit()
                 bot.send_message(group_id, f"🔇 کاربر {get_user_link(replied)} به مدت {minutes} دقیقه سکوت شد", parse_mode='HTML')
             else:
                 bot.restrict_chat_member(group_id, rid, can_send_messages=False)
-                db.add_mute(group_id, rid)
+                conn.execute('UPDATE members SET muted = 1 WHERE group_id = ? AND user_id = ?', (group_id, rid))
+                conn.commit()
                 bot.send_message(group_id, f"🔇 کاربر {get_user_link(replied)} سکوت شد", parse_mode='HTML')
         except Exception as e:
             if "can't restrict self" in str(e):
@@ -735,7 +738,8 @@ def handle(msg):
                         can_send_other_messages=True,
                         can_add_web_page_previews=True
                     )
-                    db.remove_mute(group_id, rid)
+                    conn.execute('UPDATE members SET muted = 0 WHERE group_id = ? AND user_id = ?', (group_id, rid))
+                    conn.commit()
                     bot.send_message(group_id, f"✅ سکوت کاربر {get_user_link(replied)} برداشته شد", parse_mode='HTML')
                 except Exception as e:
                     if "can't restrict self" in str(e):
