@@ -43,7 +43,8 @@ c.execute('''
 c.execute('''
     CREATE TABLE IF NOT EXISTS users (
         user_id INTEGER PRIMARY KEY,
-        name TEXT
+        name TEXT,
+        join_date TEXT
     )
 ''')
 
@@ -102,8 +103,7 @@ except:
 conn.commit()
 
 # ===== توابع دیتابیس =====
-def get_custom_welcome(group_id):
-    """دریافت متن خوش‌آمدگویی سفارشی (فقط برای بخش پایین)"""
+def get_welcome(group_id):
     c.execute('SELECT welcome_text FROM groups WHERE group_id = ?', (group_id,))
     r = c.fetchone()
     if r and r[0]:
@@ -191,7 +191,6 @@ def is_admin(user_id):
     return user_id == ADMIN_ID
 
 def is_group_admin(group_id, user_id):
-    """بررسی اینکه کاربر ادمین گروه هست یا نه (حتی حالت ناشناس)"""
     if user_id == 1087968824:
         try:
             admins = bot.get_chat_administrators(group_id)
@@ -218,8 +217,7 @@ def get_date():
     return f"{weekdays[now.weekday()]} {now.day} {months[now.month-1]} {now.year}"
 
 def get_time():
-    now = datetime.now()
-    return now.strftime('%H:%M')
+    return datetime.now().strftime('%H:%M')
 
 def get_admins_mention(group_id):
     mentions = []
@@ -308,22 +306,6 @@ def report_keyboard(report_id):
     )
     return kb
 
-# ===== خوش‌آمدگویی ثابت =====
-def get_welcome_message(user, group_title):
-    """ساخت پیام خوش‌آمدگویی ثابت با تگ کاربر"""
-    user_mention = get_user_mention(user)
-    date = get_date()
-    time = get_time()
-    
-    welcome_text = (
-        f"سلام {user_mention} عزیز\n"
-        f"به گروه {group_title} خوش آمدید 👋\n\n"
-        f"تاریخ عضویت: {date}\n"
-        f"ساعت: {time}"
-    )
-    
-    return welcome_text
-
 # ===== دستورات =====
 @bot.message_handler(commands=['start'])
 def start(msg):
@@ -339,12 +321,9 @@ def start(msg):
 @bot.message_handler(content_types=['new_chat_members'])
 def welcome(msg):
     group_id = msg.chat.id
-    group_title = msg.chat.title
-    
     c.execute('INSERT OR IGNORE INTO groups (group_id) VALUES (?)', (group_id,))
     conn.commit()
     
-    # حذف پیام ورود اعضا
     try:
         bot.delete_message(group_id, msg.message_id)
     except:
@@ -355,11 +334,29 @@ def welcome(msg):
             bot.send_message(group_id, "ربات با موفقیت به گروه اضافه شد")
             return
         
-        add_user(m.id, m.first_name)
+        # ذخیره کاربر با تاریخ عضویت
+        now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        c.execute('INSERT OR IGNORE INTO users (user_id, name, join_date) VALUES (?, ?, ?)', (m.id, m.first_name, now))
+        conn.commit()
         add_member(group_id, m.id)
         
-        # پیام خوش‌آمدگویی ثابت (همیشه همین قالب هست)
-        welcome_msg = get_welcome_message(m, group_title)
+        # ساخت پیام خوش‌آمدگویی
+        user_mention = get_user_mention(m)
+        group_name = msg.chat.title
+        join_date = get_date()
+        join_time = get_time()
+        
+        # متن خوش‌آمدگویی ثابت
+        welcome_msg = f"{user_mention} به گروه {group_name} خوش آمدید. 👋\n\n"
+        
+        # اضافه کردن متن تنظیم شده اگر وجود داشته باشد
+        custom_text = get_welcome(group_id)
+        if custom_text:
+            welcome_msg += f"{custom_text}\n\n"
+        
+        # تاریخ عضویت ثابت
+        welcome_msg += f"تاریخ عضویت: {join_date} - {join_time}"
+        
         bot.send_message(group_id, welcome_msg, parse_mode='HTML')
 
 @bot.message_handler(content_types=['left_chat_member'])
@@ -477,83 +474,85 @@ def handle(msg):
         return
     
     # ===== دستورات قفل سرویس‌ها (متنی) =====
+    
     if text == 'قفل استیکر روشن':
         update_lock_setting(group_id, 'lock_sticker', 1)
-        bot.send_message(group_id, "قفل استیکر روشن شد")
+        bot.send_message(group_id, "قفل استیکر روشن شد\nکاربران عادی نمی‌توانند استیکر ارسال کنند")
         return
     
     if text == 'قفل استیکر خاموش':
         update_lock_setting(group_id, 'lock_sticker', 0)
-        bot.send_message(group_id, "قفل استیکر خاموش شد")
+        bot.send_message(group_id, "قفل استیکر خاموش شد\nکاربران می‌توانند استیکر ارسال کنند")
         return
     
     if text == 'قفل گیف روشن':
         update_lock_setting(group_id, 'lock_gif', 1)
-        bot.send_message(group_id, "قفل گیف روشن شد")
+        bot.send_message(group_id, "قفل گیف روشن شد\nکاربران عادی نمی‌توانند گیف ارسال کنند")
         return
     
     if text == 'قفل گیف خاموش':
         update_lock_setting(group_id, 'lock_gif', 0)
-        bot.send_message(group_id, "قفل گیف خاموش شد")
+        bot.send_message(group_id, "قفل گیف خاموش شد\nکاربران می‌توانند گیف ارسال کنند")
         return
     
     if text == 'قفل ویس روشن':
         update_lock_setting(group_id, 'lock_voice', 1)
-        bot.send_message(group_id, "قفل ویس روشن شد")
+        bot.send_message(group_id, "قفل ویس روشن شد\nکاربران عادی نمی‌توانند ویس ارسال کنند")
         return
     
     if text == 'قفل ویس خاموش':
         update_lock_setting(group_id, 'lock_voice', 0)
-        bot.send_message(group_id, "قفل ویس خاموش شد")
+        bot.send_message(group_id, "قفل ویس خاموش شد\nکاربران می‌توانند ویس ارسال کنند")
         return
     
     if text == 'قفل ویدیو روشن':
         update_lock_setting(group_id, 'lock_video', 1)
-        bot.send_message(group_id, "قفل ویدیو روشن شد")
+        bot.send_message(group_id, "قفل ویدیو روشن شد\nکاربران عادی نمی‌توانند ویدیو ارسال کنند")
         return
     
     if text == 'قفل ویدیو خاموش':
         update_lock_setting(group_id, 'lock_video', 0)
-        bot.send_message(group_id, "قفل ویدیو خاموش شد")
+        bot.send_message(group_id, "قفل ویدیو خاموش شد\nکاربران می‌توانند ویدیو ارسال کنند")
         return
     
     if text == 'قفل عکس روشن':
         update_lock_setting(group_id, 'lock_photo', 1)
-        bot.send_message(group_id, "قفل عکس روشن شد")
+        bot.send_message(group_id, "قفل عکس روشن شد\nکاربران عادی نمی‌توانند عکس ارسال کنند")
         return
     
     if text == 'قفل عکس خاموش':
         update_lock_setting(group_id, 'lock_photo', 0)
-        bot.send_message(group_id, "قفل عکس خاموش شد")
+        bot.send_message(group_id, "قفل عکس خاموش شد\nکاربران می‌توانند عکس ارسال کنند")
         return
     
     if text == 'قفل فایل روشن':
         update_lock_setting(group_id, 'lock_file', 1)
-        bot.send_message(group_id, "قفل فایل روشن شد")
+        bot.send_message(group_id, "قفل فایل روشن شد\nکاربران عادی نمی‌توانند فایل ارسال کنند")
         return
     
     if text == 'قفل فایل خاموش':
         update_lock_setting(group_id, 'lock_file', 0)
-        bot.send_message(group_id, "قفل فایل خاموش شد")
+        bot.send_message(group_id, "قفل فایل خاموش شد\nکاربران می‌توانند فایل ارسال کنند")
         return
     
     if text == 'قفل همه روشن':
         update_lock_setting(group_id, 'lock_all', 1)
-        bot.send_message(group_id, "قفل همه روشن شد")
+        bot.send_message(group_id, "قفل همه روشن شد\nکاربران عادی نمی‌توانند هیچ محتوایی ارسال کنند")
         return
     
     if text == 'قفل همه خاموش':
         update_lock_setting(group_id, 'lock_all', 0)
-        bot.send_message(group_id, "قفل همه خاموش شد")
+        bot.send_message(group_id, "قفل همه خاموش شد\nکاربران می‌توانند محتوا ارسال کنند")
         return
     
+    # تنظیم خوش‌آمدگویی (فقط متن اضافی)
     if text.startswith('تنظیم خوشامد'):
         new = text.replace('تنظیم خوشامد', '').strip()
         if new:
             set_welcome(group_id, new)
-            bot.send_message(group_id, f"متن سفارشی خوش‌آمدگویی تنظیم شد (فقط برای بخش پایین)\n\n{new}")
+            bot.send_message(group_id, f"متن اضافی خوش‌آمدگویی تنظیم شد:\n\n{new}")
         else:
-            bot.send_message(group_id, "لطفاً متن را وارد کنید")
+            bot.send_message(group_id, "لطفاً متن را وارد کنید:\nتنظیم خوشامد متن دلخواه")
         return
     
     if text.startswith('تنظیم اخطار'):
@@ -565,7 +564,7 @@ def handle(msg):
             set_max_warn(group_id, n)
             bot.send_message(group_id, f"تعداد اخطارها با موفقیت به {n} تنظیم شد")
         except:
-            bot.send_message(group_id, "لطفاً یک عدد معتبر وارد کنید")
+            bot.send_message(group_id, "لطفاً یک عدد معتبر وارد کنید:\nتنظیم اخطار 5")
         return
     
     if text == 'راهنما':
@@ -595,7 +594,7 @@ def handle(msg):
             "پنل - نمایش پنل مدیریت\n"
             "آمار - نمایش آمار\n"
             "راهنما - نمایش این راهنما\n"
-            "تنظیم خوشامد متن - تنظیم متن سفارشی\n"
+            "تنظیم خوشامد متن - تنظیم متن اضافی خوش‌آمدگویی\n"
             "تنظیم اخطار عدد - تنظیم تعداد اخطارها"
         )
         bot.send_message(group_id, help_text)
@@ -905,10 +904,14 @@ def callback(call):
     elif data == 'settings':
         bot.edit_message_text(
             "تنظیمات گروه\n\n"
-            "برای تنظیم متن سفارشی خوش‌آمدگویی:\n"
+            "برای تنظیم متن اضافی خوش‌آمدگویی:\n"
             "تنظیم خوشامد متن جدید\n\n"
-            "توجه: قسمت بالای خوش‌آمدگویی ثابت است\n"
-            "و فقط این متن به انتها اضافه می‌شود",
+            "برای تنظیم تعداد اخطارها:\n"
+            "تنظیم اخطار عدد\n\n"
+            "متن خوش‌آمدگویی ثابت:\n"
+            "سلام {user} به گروه {group} خوش آمدید. 👋\n\n"
+            "[متن دلخواه شما]\n\n"
+            "تاریخ عضویت: {date} - {time}",
             group_id, call.message.message_id
         )
         bot.answer_callback_query(call.id)
@@ -957,7 +960,7 @@ if __name__ == '__main__':
     print("قفل عکس روشن/خاموش - قفل عکس")
     print("قفل فایل روشن/خاموش - قفل فایل")
     print("قفل همه روشن/خاموش - قفل همه")
-    print("تنظیم خوشامد متن - تنظیم متن سفارشی")
+    print("تنظیم خوشامد متن - تنظیم متن اضافی خوش‌آمدگویی")
     print("تنظیم اخطار عدد - تنظیم تعداد اخطارها")
     print("=" * 50)
     
