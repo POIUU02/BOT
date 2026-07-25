@@ -209,15 +209,12 @@ def is_group_admin(group_id, user_id):
 def get_name(user):
     return user.first_name or user.username or 'کاربر'
 
-def get_date():
+def get_persian_date():
     now = jdatetime.datetime.now()
     weekdays = ['شنبه', 'یکشنبه', 'دوشنبه', 'سه‌شنبه', 'چهارشنبه', 'پنجشنبه', 'جمعه']
     months = ['فروردین', 'اردیبهشت', 'خرداد', 'تیر', 'مرداد', 'شهریور', 
               'مهر', 'آبان', 'آذر', 'دی', 'بهمن', 'اسفند']
     return f"{weekdays[now.weekday()]} {now.day} {months[now.month-1]} {now.year}"
-
-def get_time():
-    return datetime.now().strftime('%H:%M')
 
 def get_admins_mention(group_id):
     mentions = []
@@ -343,8 +340,7 @@ def welcome(msg):
         # ساخت پیام خوش‌آمدگویی
         user_mention = get_user_mention(m)
         group_name = msg.chat.title
-        join_date = get_date()
-        join_time = get_time()
+        join_date = get_persian_date()
         
         # متن خوش‌آمدگویی ثابت
         welcome_msg = f"{user_mention} به گروه {group_name} خوش آمدید. 👋\n\n"
@@ -354,8 +350,8 @@ def welcome(msg):
         if custom_text:
             welcome_msg += f"{custom_text}\n\n"
         
-        # تاریخ عضویت ثابت
-        welcome_msg += f"تاریخ عضویت: {join_date} - {join_time}"
+        # تاریخ عضویت (فقط تاریخ)
+        welcome_msg += f"تاریخ عضویت: {join_date}"
         
         bot.send_message(group_id, welcome_msg, parse_mode='HTML')
 
@@ -454,12 +450,10 @@ def handle(msg):
     if text == 'آمار':
         top = get_top(group_id, 5)
         total = get_total_msgs(group_id)
-        date = get_date()
-        time_now = get_time()
+        date = get_persian_date()
         
         t = f"فعالیت های امروز:\n\n"
-        t += f"تاریخ: {date}\n"
-        t += f"ساعت: {time_now}\n\n"
+        t += f"تاریخ: {date}\n\n"
         t += f"کل پیام ها: {total}\n\n"
         t += "فعال ترین اعضا:\n"
         
@@ -882,12 +876,10 @@ def callback(call):
     elif data == 'stats':
         top = get_top(group_id, 5)
         total = get_total_msgs(group_id)
-        date = get_date()
-        time_now = get_time()
+        date = get_persian_date()
         
         t = f"فعالیت های امروز:\n\n"
-        t += f"تاریخ: {date}\n"
-        t += f"ساعت: {time_now}\n\n"
+        t += f"تاریخ: {date}\n\n"
         t += f"کل پیام ها: {total}\n\n"
         t += "فعال ترین اعضا:\n"
         
@@ -911,7 +903,7 @@ def callback(call):
             "متن خوش‌آمدگویی ثابت:\n"
             "سلام {user} به گروه {group} خوش آمدید. 👋\n\n"
             "[متن دلخواه شما]\n\n"
-            "تاریخ عضویت: {date} - {time}",
+            "تاریخ عضویت: {date}",
             group_id, call.message.message_id
         )
         bot.answer_callback_query(call.id)
