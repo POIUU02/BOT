@@ -313,8 +313,8 @@ def lock_menu_keyboard(group_id):
 def report_keyboard(report_id):
     kb = InlineKeyboardMarkup(row_width=2)
     kb.add(
-        InlineKeyboardButton("بررسی شد", callback_data=f"res_{report_id}"),
-        InlineKeyboardButton("حذف", callback_data=f"del_{report_id}")
+        InlineKeyboardButton("✅ بررسی شد", callback_data=f"res_{report_id}"),
+        InlineKeyboardButton("🗑️ حذف", callback_data=f"del_{report_id}")
     )
     return kb
 
@@ -429,32 +429,34 @@ def handle(msg):
     if not admin:
         if msg.reply_to_message and text == 'گزارش':
             reported = msg.reply_to_message.from_user
-            
-            # بررسی اینکه کاربر خودش رو گزارش نکنه
             if reported.id == user_id:
-                bot.send_message(group_id, "• گزارش شما برای مدیران گروه ارسال شد!​")
+                bot.send_message(group_id, "نمی‌توانید خود را گزارش کنید")
                 return
             
-            # بررسی اینکه ادمین رو گزارش نکنه
             if is_group_admin(group_id, reported.id):
-                bot.send_message(group_id, "• گزارش شما برای مدیران گروه ارسال شد!​")
+                bot.send_message(group_id, "نمی‌توانید ادمین را گزارش کنید")
                 return
             
-            # ذخیره گزارش در دیتابیس
             reason = "بدون دلیل"
             if len(msg.text.split()) > 1:
                 reason = msg.text.replace('گزارش', '').strip()
             
             report_id = add_report(group_id, user_id, reported.id, msg.reply_to_message.message_id, reason)
             
-            # ارسال گزارش به ادمین‌ها (با تگ مخفی)
+            # تگ مخفی ادمین‌ها (فقط ادمین‌ها می‌بینن)
             admin_mentions = get_admins_mention(group_id)
             admin_text = " ".join(admin_mentions) if admin_mentions else ""
             
-            # فقط ادمین‌ها این پیام رو می‌بینن (با تگ)
+            # پیام گزارش برای ادمین‌ها
+            report_msg = f"{admin_text}\n\n" if admin_text else ""
+            report_msg += f"📋 گزارش جدید\n\n"
+            report_msg += f"👤 گزارش دهنده: {get_user_link(msg.from_user)}\n"
+            report_msg += f"👤 گزارش شده: {get_user_link(reported)}\n"
+            report_msg += f"📝 دلیل: {reason}"
+            
             bot.send_message(
                 group_id,
-                admin_text,
+                report_msg,
                 parse_mode='HTML',
                 reply_markup=report_keyboard(report_id)
             )
@@ -607,7 +609,7 @@ def handle(msg):
             "کاربران عادی:\n"
             "گزارش - گزارش پیام (با ریپلای)\n\n"
             "دستورات:\n"
-            "پنل - نمایش پنل مدیریت\n"
+            "پنل - نمایش پنل управления\n"
             "آمار - نمایش آمار\n"
             "راهنما - نمایش این راهنما\n"
             "تنظیم خوشامد متن - تنظیم متن اضافی خوش‌آمدگویی\n"
@@ -941,7 +943,7 @@ def callback(call):
     elif data.startswith('res_'):
         report_id = int(data.replace('res_', ''))
         upd_report(report_id, 'resolved')
-        bot.edit_message_text("✅ گزارش بررسی شد", group_id, call.message.message_id)
+        bot.edit_message_text(call.message.text + "\n\n✅ بررسی شد", group_id, call.message.message_id)
         bot.answer_callback_query(call.id, "گزارش بررسی شد")
     
     elif data.startswith('del_'):
