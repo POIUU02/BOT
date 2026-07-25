@@ -5,15 +5,18 @@ import os
 import sqlite3
 import time
 import re
-import threading
 from datetime import datetime
 import jdatetime
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-# ===== توکن =====
-BOT_TOKEN = "8379881886:AAH3qx-KKc0Oym1tOwXWCbnNU97COVCqtFk"
-ADMIN_ID = 6443963679
+# ===== گرفتن توکن از متغیر محیطی =====
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_ID = int(os.getenv("ADMIN_ID", "6443963679"))
+
+if not BOT_TOKEN:
+    print("❌ توکن ربات پیدا نشد! متغیر BOT_TOKEN را تنظیم کنید.")
+    exit(1)
 
 bot = telebot.TeleBot(BOT_TOKEN)
 bot.parse_mode = 'HTML'
@@ -22,36 +25,18 @@ bot.parse_mode = 'HTML'
 conn = sqlite3.connect('bot.db', check_same_thread=False)
 c = conn.cursor()
 
-# جدول گروه‌ها با اطلاعات کامل
 c.execute('''
     CREATE TABLE IF NOT EXISTS groups (
         group_id INTEGER PRIMARY KEY,
-        title TEXT,
         welcome_text TEXT,
         max_warnings INTEGER DEFAULT 3,
-        filter_link INTEGER DEFAULT 0,
-        filter_gif INTEGER DEFAULT 0,
-        filter_sticker INTEGER DEFAULT 0,
-        filter_forward INTEGER DEFAULT 0,
-        filter_photo INTEGER DEFAULT 0,
-        filter_video INTEGER DEFAULT 0,
-        filter_audio INTEGER DEFAULT 0,
-        filter_voice INTEGER DEFAULT 0,
-        added_date TEXT,
-        last_check TEXT
-    )
-''')
-
-# جدول ادمین‌های گروه
-c.execute('''
-    CREATE TABLE IF NOT EXISTS group_admins (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        group_id INTEGER,
-        user_id INTEGER,
-        username TEXT,
-        first_name TEXT,
-        is_owner INTEGER DEFAULT 0,
-        UNIQUE(group_id, user_id)
+        lock_sticker INTEGER DEFAULT 0,
+        lock_gif INTEGER DEFAULT 0,
+        lock_voice INTEGER DEFAULT 0,
+        lock_video INTEGER DEFAULT 0,
+        lock_photo INTEGER DEFAULT 0,
+        lock_file INTEGER DEFAULT 0,
+        lock_all INTEGER DEFAULT 0
     )
 ''')
 
@@ -85,70 +70,47 @@ c.execute('''
     )
 ''')
 
+try:
+    c.execute("ALTER TABLE groups ADD COLUMN lock_sticker INTEGER DEFAULT 0")
+except:
+    pass
+try:
+    c.execute("ALTER TABLE groups ADD COLUMN lock_gif INTEGER DEFAULT 0")
+except:
+    pass
+try:
+    c.execute("ALTER TABLE groups ADD COLUMN lock_voice INTEGER DEFAULT 0")
+except:
+    pass
+try:
+    c.execute("ALTER TABLE groups ADD COLUMN lock_video INTEGER DEFAULT 0")
+except:
+    pass
+try:
+    c.execute("ALTER TABLE groups ADD COLUMN lock_photo INTEGER DEFAULT 0")
+except:
+    pass
+try:
+    c.execute("ALTER TABLE groups ADD COLUMN lock_file INTEGER DEFAULT 0")
+except:
+    pass
+try:
+    c.execute("ALTER TABLE groups ADD COLUMN lock_all INTEGER DEFAULT 0")
+except:
+    pass
+
 conn.commit()
 
 # ===== توابع دیتابیس =====
-def save_group(group_id, title):
-    c.execute('''
-        INSERT OR REPLACE INTO groups (group_id, title, added_date, last_check)
-        VALUES (?, ?, ?, ?)
-    ''', (group_id, title, str(datetime.now()), str(datetime.now())))
-    conn.commit()
-    print(f"✅ گروه {title} ({group_id}) ذخیره شد")
-
-def get_all_groups():
-    c.execute('SELECT group_id, title FROM groups')
-    return c.fetchall()
-
-def update_group_admins(group_id):
-    try:
-        admins = bot.get_chat_administrators(group_id)
-        c.execute('DELETE FROM group_admins WHERE group_id = ?', (group_id,))
-        
-        for admin in admins:
-            user = admin.user
-            is_owner = 1 if admin.status == 'creator' else 0
-            c.execute('''
-                INSERT INTO group_admins (group_id, user_id, username, first_name, is_owner)
-                VALUES (?, ?, ?, ?, ?)
-            ''', (group_id, user.id, user.username, user.first_name, is_owner))
-            
-            c.execute('INSERT OR IGNORE INTO users (user_id, name) VALUES (?, ?)', 
-                     (user.id, user.first_name))
-        
-        conn.commit()
-        c.execute('UPDATE groups SET last_check = ? WHERE group_id = ?', 
-                 (str(datetime.now()), group_id))
-        conn.commit()
-        print(f"✅ ادمین‌های گروه {group_id} به‌روزرسانی شدند ({len(admins)} نفر)")
-        return True
-    except Exception as e:
-        print(f"❌ خطا در به‌روزرسانی ادمین‌های گروه {group_id}: {e}")
-        return False
-
-def is_group_admin_db(group_id, user_id):
-    try:
-        c.execute('SELECT id FROM group_admins WHERE group_id = ? AND user_id = ?', 
-                 (group_id, user_id))
-        return bool(c.fetchone())
-    except:
-        return False
-
-def is_group_owner_db(group_id, user_id):
-    try:
-        c.execute('SELECT id FROM group_admins WHERE group_id = ? AND user_id = ? AND is_owner = 1', 
-                 (group_id, user_id))
-        return bool(c.fetchone())
-    except:
-        return False
-
 def get_welcome(group_id):
     c.execute('SELECT welcome_text FROM groups WHERE group_id = ?', (group_id,))
     r = c.fetchone()
-    return r[0] if r and r[0] else 'به گروه خوش آمدی {user}'
+    if r and r[0]:
+        return r[0]
+    return 'به گروه خوش آمدی {user}'
 
 def set_welcome(group_id, text):
-    c.execute('UPDATE groups SET welcome_text = ? WHERE group_id = ?', (text, group_id))
+    c.execute('INSERT OR REPLACE INTO groups (group_id, welcome_text) VALUES (?, ?)', (group_id, text))
     conn.commit()
 
 def get_max_warn(group_id):
@@ -157,27 +119,26 @@ def get_max_warn(group_id):
     return r[0] if r else 3
 
 def set_max_warn(group_id, count):
-    c.execute('UPDATE groups SET max_warnings = ? WHERE group_id = ?', (count, group_id))
+    c.execute('INSERT OR REPLACE INTO groups (group_id, max_warnings) VALUES (?, ?)', (group_id, count))
     conn.commit()
 
-def get_filter_settings(group_id):
-    c.execute('SELECT filter_link, filter_gif, filter_sticker, filter_forward, filter_photo, filter_video, filter_audio, filter_voice FROM groups WHERE group_id = ?', (group_id,))
+def get_lock_settings(group_id):
+    c.execute('SELECT lock_sticker, lock_gif, lock_voice, lock_video, lock_photo, lock_file, lock_all FROM groups WHERE group_id = ?', (group_id,))
     r = c.fetchone()
     if r:
         return {
-            'link': bool(r[0]),
-            'gif': bool(r[1]),
-            'sticker': bool(r[2]),
-            'forward': bool(r[3]),
-            'photo': bool(r[4]),
-            'video': bool(r[5]),
-            'audio': bool(r[6]),
-            'voice': bool(r[7])
+            'sticker': r[0] if r[0] is not None else 0,
+            'gif': r[1] if r[1] is not None else 0,
+            'voice': r[2] if r[2] is not None else 0,
+            'video': r[3] if r[3] is not None else 0,
+            'photo': r[4] if r[4] is not None else 0,
+            'file': r[5] if r[5] is not None else 0,
+            'all': r[6] if r[6] is not None else 0
         }
-    return {'link': False, 'gif': False, 'sticker': False, 'forward': False, 'photo': False, 'video': False, 'audio': False, 'voice': False}
+    return {'sticker': 0, 'gif': 0, 'voice': 0, 'video': 0, 'photo': 0, 'file': 0, 'all': 0}
 
-def toggle_filter(group_id, filter_name):
-    c.execute(f'UPDATE groups SET filter_{filter_name} = NOT filter_{filter_name} WHERE group_id = ?', (group_id,))
+def update_lock_setting(group_id, setting, value):
+    c.execute(f'UPDATE groups SET {setting} = ? WHERE group_id = ?', (value, group_id))
     conn.commit()
 
 def add_user(user_id, name):
@@ -224,113 +185,30 @@ def upd_report(report_id, status):
     c.execute('UPDATE reports SET status = ? WHERE id = ?', (status, report_id))
     conn.commit()
 
-# ===== دیباگ =====
-def debug_log(message, title="📝 درخواست جدید"):
-    try:
-        group_id = message.chat.id
-        group_title = message.chat.title
-        
-        is_anon = False
-        if message.sender_chat:
-            is_anon = True
-        elif message.from_user and hasattr(message.from_user, 'is_anonymous'):
-            if message.from_user.is_anonymous:
-                is_anon = True
-        
-        if is_anon:
-            user_id = message.sender_chat.id if message.sender_chat else 0
-            user_name = message.sender_chat.title if message.sender_chat else 'ناشناس'
-            username = 'ناشناس'
-            user_type = '🕵️ ناشناس'
-        else:
-            user_id = message.from_user.id
-            user_name = message.from_user.first_name
-            username = message.from_user.username or 'ندارد'
-            
-            if user_id == ADMIN_ID:
-                user_type = '👑 ادمین اصلی'
-            elif is_group_admin_db(group_id, user_id):
-                user_type = '🛡️ ادمین گروه'
-            elif is_group_owner_db(group_id, user_id):
-                user_type = '👑 مالک گروه'
-            else:
-                user_type = '👤 کاربر عادی'
-        
-        text = message.text if message.text else '[غیرمتنی]'
-        
-        print("=" * 70)
-        print(f"{title}")
-        print("=" * 70)
-        print(f"📱 کاربر: {user_name}")
-        print(f"🆔 آیدی: {user_id}")
-        print(f"👤 نقش: {user_type}")
-        print(f"🏠 گروه: {group_title} ({group_id})")
-        print(f"📝 متن: {text[:200]}{'...' if len(text) > 200 else ''}")
-        print(f"🕐 زمان: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        print(f"🔄 ناشناس: {'✅' if is_anon else '❌'}")
-        print(f"📎 ریپلای: {'✅' if message.reply_to_message else '❌'}")
-        print("=" * 70)
-        
-        return {
-            'user_id': user_id,
-            'user_name': user_name,
-            'is_anon': is_anon,
-            'user_type': user_type,
-            'text': text
-        }
-    except Exception as e:
-        print(f"❌ خطا در دیباگ: {e}")
-        return None
-
 # ===== توابع کمکی =====
 def is_admin(user_id):
     return user_id == ADMIN_ID
 
-def is_group_admin_or_owner(group_id, user_id):
-    """بررسی ادمین یا مالک بودن کاربر در گروه"""
-    if is_admin(user_id):
-        return True
-    return is_group_admin_db(group_id, user_id) or is_group_owner_db(group_id, user_id)
-
-def is_anonymous(message):
-    try:
-        if message.sender_chat:
-            return True
-        if message.from_user and hasattr(message.from_user, 'is_anonymous'):
-            if message.from_user.is_anonymous:
+def is_group_admin(group_id, user_id):
+    """بررسی اینکه کاربر ادمین گروه هست یا نه (حتی حالت ناشناس)"""
+    # اگر کاربر ناشناس باشه (آیدی 1087968824)
+    if user_id == 1087968824:
+        try:
+            admins = bot.get_chat_administrators(group_id)
+            if admins:
                 return True
+        except:
+            pass
         return False
+    
+    try:
+        m = bot.get_chat_member(group_id, user_id)
+        return m.status in ['administrator', 'creator']
     except:
         return False
 
-def get_user_id(message):
-    try:
-        if is_anonymous(message):
-            if message.sender_chat:
-                return message.sender_chat.id
-        return message.from_user.id
-    except:
-        return 0
-
-def get_user_name(message):
-    try:
-        if is_anonymous(message):
-            if message.sender_chat:
-                return message.sender_chat.title or 'ناشناس'
-            return 'ناشناس'
-        return message.from_user.first_name or 'کاربر'
-    except:
-        return 'ناشناس'
-
-def get_user_link(message):
-    try:
-        if is_anonymous(message):
-            return 'ناشناس'
-        if message.from_user.username:
-            return f"@{message.from_user.username}"
-        return f"<a href='tg://user?id={message.from_user.id}'>{message.from_user.first_name}</a>"
-    except:
-        return 'ناشناس'
+def get_name(user):
+    return user.first_name or user.username or 'کاربر'
 
 def get_date():
     now = jdatetime.datetime.now()
@@ -342,24 +220,27 @@ def get_date():
 def get_time():
     return datetime.now().strftime('%H:%M')
 
+def get_admins_mention(group_id):
+    mentions = []
+    try:
+        admins = bot.get_chat_administrators(group_id)
+        for a in admins:
+            if not a.user.is_bot:
+                if a.user.username:
+                    mentions.append(f"@{a.user.username}")
+                else:
+                    mentions.append(f"<a href='tg://user?id={a.user.id}'>{a.user.first_name}</a>")
+    except:
+        pass
+    return mentions
+
 def get_user_mention(user):
     if user.username:
         return f"@{user.username}"
     return f"<a href='tg://user?id={user.id}'>{user.first_name}</a>"
 
-# ===== تابع بررسی خودکار ادمین‌ها =====
-def auto_update_admins():
-    while True:
-        try:
-            print("🔄 شروع به‌روزرسانی خودکار ادمین‌ها...")
-            groups = get_all_groups()
-            for group_id, title in groups:
-                update_group_admins(group_id)
-            print(f"✅ به‌روزرسانی خودکار کامل شد ({len(groups)} گروه)")
-            time.sleep(3600)  # هر 1 ساعت
-        except Exception as e:
-            print(f"❌ خطا در به‌روزرسانی خودکار: {e}")
-            time.sleep(300)
+def get_user_link(user):
+    return f"<a href='tg://user?id={user.id}'>{user.first_name}</a>"
 
 # ===== کیبوردها =====
 def admin_keyboard():
@@ -381,7 +262,11 @@ def admin_keyboard():
         InlineKeyboardButton("پاک‌سازی", callback_data="clearwarn")
     )
     kb.add(
-        InlineKeyboardButton("تگ همه", callback_data="tagall"),
+        InlineKeyboardButton("تگ ادمین‌ها", callback_data="tagadmins"),
+        InlineKeyboardButton("تگ همه", callback_data="tagall")
+    )
+    kb.add(
+        InlineKeyboardButton("قفل سرویس‌ها", callback_data="lock_menu"),
         InlineKeyboardButton("آمار", callback_data="stats")
     )
     kb.add(
@@ -389,46 +274,28 @@ def admin_keyboard():
     )
     return kb
 
-def settings_keyboard(group_id):
-    settings = get_filter_settings(group_id)
+def lock_menu_keyboard(group_id):
+    locks = get_lock_settings(group_id)
+    
     kb = InlineKeyboardMarkup(row_width=2)
+    
+    status = "روشن" if locks['all'] else "خاموش"
+    kb.add(InlineKeyboardButton(f"قفل همه: {status}", callback_data=f"lock_all_{group_id}"))
+    
     kb.add(
-        InlineKeyboardButton(f"لینک: {'ON' if settings['link'] else 'OFF'}", callback_data="toggle_link"),
-        InlineKeyboardButton(f"گیف: {'ON' if settings['gif'] else 'OFF'}", callback_data="toggle_gif")
+        InlineKeyboardButton(f"استیکر: {'روشن' if locks['sticker'] else 'خاموش'}", callback_data=f"lock_sticker_{group_id}"),
+        InlineKeyboardButton(f"گیف: {'روشن' if locks['gif'] else 'خاموش'}", callback_data=f"lock_gif_{group_id}")
     )
     kb.add(
-        InlineKeyboardButton(f"استیکر: {'ON' if settings['sticker'] else 'OFF'}", callback_data="toggle_sticker"),
-        InlineKeyboardButton(f"فوروارد: {'ON' if settings['forward'] else 'OFF'}", callback_data="toggle_forward")
+        InlineKeyboardButton(f"ویس: {'روشن' if locks['voice'] else 'خاموش'}", callback_data=f"lock_voice_{group_id}"),
+        InlineKeyboardButton(f"ویدیو: {'روشن' if locks['video'] else 'خاموش'}", callback_data=f"lock_video_{group_id}")
     )
     kb.add(
-        InlineKeyboardButton(f"عکس: {'ON' if settings['photo'] else 'OFF'}", callback_data="toggle_photo"),
-        InlineKeyboardButton(f"ویدیو: {'ON' if settings['video'] else 'OFF'}", callback_data="toggle_video")
-    )
-    kb.add(
-        InlineKeyboardButton(f"آهنگ: {'ON' if settings['audio'] else 'OFF'}", callback_data="toggle_audio"),
-        InlineKeyboardButton(f"ویس: {'ON' if settings['voice'] else 'OFF'}", callback_data="toggle_voice")
-    )
-    kb.add(
-        InlineKeyboardButton("تنظیم خوش‌آمدگویی", callback_data="set_welcome"),
-        InlineKeyboardButton("تنظیم اخطارها", callback_data="set_warnings")
+        InlineKeyboardButton(f"عکس: {'روشن' if locks['photo'] else 'خاموش'}", callback_data=f"lock_photo_{group_id}"),
+        InlineKeyboardButton(f"فایل: {'روشن' if locks['file'] else 'خاموش'}", callback_data=f"lock_file_{group_id}")
     )
     kb.add(
         InlineKeyboardButton("بازگشت", callback_data="back_main")
-    )
-    return kb
-
-def warnings_keyboard(group_id):
-    current = get_max_warn(group_id)
-    kb = InlineKeyboardMarkup(row_width=3)
-    kb.add(
-        InlineKeyboardButton("-1", callback_data="warn_dec"),
-        InlineKeyboardButton(f"{current}", callback_data="warn_current"),
-        InlineKeyboardButton("+1", callback_data="warn_inc")
-    )
-    kb.add(
-        InlineKeyboardButton("-3", callback_data="warn_dec3"),
-        InlineKeyboardButton("بازگشت", callback_data="back_settings"),
-        InlineKeyboardButton("+3", callback_data="warn_inc3")
     )
     return kb
 
@@ -440,10 +307,9 @@ def report_keyboard(report_id):
     )
     return kb
 
-# ===== هندلر استارت =====
+# ===== دستورات =====
 @bot.message_handler(commands=['start'])
 def start(msg):
-    debug_log(msg, "🚀 استارت ربات")
     if msg.chat.type == 'private':
         bot.send_message(msg.chat.id, 
             "به ربات مدیریت گروه خوش آمدید\n\n"
@@ -453,19 +319,11 @@ def start(msg):
             )
         )
 
-# ===== خوش‌آمدگویی و ذخیره گروه =====
 @bot.message_handler(content_types=['new_chat_members'])
 def welcome(msg):
     group_id = msg.chat.id
-    group_title = msg.chat.title
-    
-    # ذخیره گروه
-    save_group(group_id, group_title)
-    
-    # به‌روزرسانی ادمین‌ها
-    update_group_admins(group_id)
-    
-    debug_log(msg, "🎉 عضو جدید")
+    c.execute('INSERT OR IGNORE INTO groups (group_id) VALUES (?)', (group_id,))
+    conn.commit()
     
     try:
         bot.delete_message(group_id, msg.message_id)
@@ -487,142 +345,92 @@ def welcome(msg):
         
         bot.send_message(group_id, welcome_text, parse_mode='HTML')
 
-# ===== خروج عضو =====
 @bot.message_handler(content_types=['left_chat_member'])
 def member_left(msg):
-    debug_log(msg, "🚪 خروج عضو")
     group_id = msg.chat.id
     try:
         bot.delete_message(group_id, msg.message_id)
     except:
         pass
 
-# ===== فیلتر کردن پیام‌ها =====
-@bot.message_handler(func=lambda m: m.chat.type in ['group', 'supergroup'], content_types=['text', 'photo', 'video', 'audio', 'voice', 'document', 'sticker', 'animation'])
-def filter_messages(msg):
-    debug_log(msg, "🔍 بررسی فیلتر")
+# ===== چک کردن قفل‌ها برای کاربران عادی =====
+@bot.message_handler(func=lambda m: m.chat.type in ['group', 'supergroup'], content_types=['sticker', 'animation', 'voice', 'video', 'photo', 'document'])
+def check_locks(msg):
     group_id = msg.chat.id
-    user_id = get_user_id(msg)
-    user_name = get_user_name(msg)
+    user_id = msg.from_user.id
     
-    if user_id == 0:
+    # ادمین‌ها از قفل معاف هستند
+    if is_admin(user_id) or is_group_admin(group_id, user_id):
         return
     
-    # ادمین‌ها و ناشناس‌ها از فیلتر عبور می‌کنن
-    if is_admin(user_id) or is_group_admin_or_owner(group_id, user_id) or is_anonymous(msg):
-        print(f"✅ {user_name} - رد شدن از فیلتر (ادمین/ناشناس)")
-        return
+    locks = get_lock_settings(group_id)
     
-    settings = get_filter_settings(group_id)
-    should_delete = False
-    reason = ""
-    
-    if settings['link'] and msg.text:
-        link_pattern = r'(https?://\S+)|(t\.me/\S+)|(telegram\.me/\S+)|(@\w+)'
-        if re.search(link_pattern, msg.text, re.IGNORECASE):
-            should_delete = True
-            reason = "ارسال لینک ممنوع است"
-    elif settings['forward'] and msg.forward_date:
-        should_delete = True
-        reason = "فوروارد پیام ممنوع است"
-    elif settings['gif'] and msg.animation:
-        should_delete = True
-        reason = "ارسال گیف ممنوع است"
-    elif settings['sticker'] and msg.sticker:
-        should_delete = True
-        reason = "ارسال استیکر ممنوع است"
-    elif settings['photo'] and msg.photo:
-        should_delete = True
-        reason = "ارسال عکس ممنوع است"
-    elif settings['video'] and msg.video:
-        should_delete = True
-        reason = "ارسال ویدیو ممنوع است"
-    elif settings['audio'] and msg.audio:
-        should_delete = True
-        reason = "ارسال آهنگ ممنوع است"
-    elif settings['voice'] and msg.voice:
-        should_delete = True
-        reason = "ارسال ویس ممنوع است"
-    
-    if should_delete:
-        print(f"🗑️ حذف پیام از {user_name} - دلیل: {reason}")
+    if locks['all']:
         try:
             bot.delete_message(group_id, msg.message_id)
-            bot.send_message(
-                group_id,
-                f"⚠️ {user_name}\n{reason}",
-                parse_mode='HTML'
-            )
-            
-            max_w = get_max_warn(group_id)
-            warns = add_warn(group_id, user_id)
-            
-            if warns >= max_w:
-                try:
-                    bot.ban_chat_member(group_id, user_id)
-                    clear_warn(group_id, user_id)
-                    bot.send_message(
-                        group_id,
-                        f"🚫 کاربر {user_name} بعد از {max_w} اخطار بن شد",
-                        parse_mode='HTML'
-                    )
-                    print(f"🚫 کاربر {user_name} بن شد")
-                except:
-                    pass
-            else:
-                remaining = max_w - warns
-                bot.send_message(
-                    group_id,
-                    f"⚠️ اخطار {warns} از {max_w} برای {user_name}\n{remaining} اخطار تا بن شدن",
-                    parse_mode='HTML'
-                )
-                print(f"⚠️ اخطار {warns}/{max_w} برای {user_name}")
+        except:
+            pass
+        return
+    
+    content_type = None
+    name = ""
+    if msg.sticker:
+        content_type = 'sticker'
+        name = 'استیکر'
+    elif msg.animation:
+        content_type = 'gif'
+        name = 'گیف'
+    elif msg.voice:
+        content_type = 'voice'
+        name = 'ویس'
+    elif msg.video:
+        content_type = 'video'
+        name = 'ویدیو'
+    elif msg.photo:
+        content_type = 'photo'
+        name = 'عکس'
+    elif msg.document:
+        content_type = 'file'
+        name = 'فایل'
+    
+    if content_type and locks.get(content_type, 0):
+        try:
+            bot.delete_message(group_id, msg.message_id)
         except:
             pass
 
-# ===== هندلر اصلی =====
-@bot.message_handler(func=lambda m: True, content_types=['text'])
-def handle_all_messages(msg):
-    if msg.chat.type not in ['group', 'supergroup']:
-        return
-    
-    debug_info = debug_log(msg, "📩 دستور دریافتی")
-    if not debug_info:
-        return
-    
+@bot.message_handler(func=lambda m: m.chat.type in ['group', 'supergroup'], content_types=['text'])
+def handle(msg):
     group_id = msg.chat.id
-    user_id = debug_info['user_id']
-    user_name = debug_info['user_name']
-    is_anon = debug_info['is_anon']
-    user_type = debug_info['user_type']
+    user_id = msg.from_user.id
     text = msg.text.strip() if msg.text else ""
     
-    # ذخیره کاربر
-    if not is_anon:
-        add_user(user_id, msg.from_user.first_name if msg.from_user else 'ناشناس')
-        add_member(group_id, user_id)
-        add_msg(group_id, user_id)
+    c.execute('INSERT OR IGNORE INTO groups (group_id) VALUES (?)', (group_id,))
+    conn.commit()
     
-    # بررسی ادمین (حتی برای ناشناس‌ها هم True برگردون)
-    is_admin_user = is_admin(user_id) or is_group_admin_or_owner(group_id, user_id) or is_anon
+    add_user(user_id, msg.from_user.first_name)
+    add_member(group_id, user_id)
+    add_msg(group_id, user_id)
     
-    # ===== کاربر عادی =====
-    if not is_admin_user:
-        print(f"⛔ کاربر عادی - فقط گزارش")
+    admin = is_admin(user_id) or is_group_admin(group_id, user_id)
+    
+    if not admin:
         if msg.reply_to_message and text == 'گزارش':
-            reported_id = get_user_id(msg.reply_to_message)
-            reported_name = get_user_name(msg.reply_to_message)
-            
-            if reported_id == user_id:
+            reported = msg.reply_to_message.from_user
+            if reported.id == user_id:
                 bot.send_message(group_id, "نمی‌توانید خود را گزارش کنید")
                 return
             
-            report_id = add_report(group_id, user_id, reported_id, msg.reply_to_message.message_id)
+            report_id = add_report(group_id, user_id, reported.id, msg.reply_to_message.message_id)
             
-            report_msg = f"📋 گزارش جدید\n\n"
-            report_msg += f"👤 گزارش دهنده: {user_name}\n"
-            report_msg += f"👤 گزارش شده: {reported_name}\n"
-            report_msg += f"📝 متن: {msg.reply_to_message.text or 'متن نیست'}"
+            admins = get_admins_mention(group_id)
+            admin_text = " ".join(admins) if admins else ""
+            
+            report_msg = f"{admin_text}\n\n" if admin_text else ""
+            report_msg += f"گزارش جدید\n\n"
+            report_msg += f"گزارش دهنده: {get_user_link(msg.from_user)}\n"
+            report_msg += f"گزارش شده: {get_user_link(reported)}\n"
+            report_msg += f"متن: {msg.reply_to_message.text or 'متن نیست'}"
             
             bot.send_message(
                 group_id,
@@ -630,88 +438,157 @@ def handle_all_messages(msg):
                 parse_mode='HTML',
                 reply_markup=report_keyboard(report_id)
             )
-            bot.send_message(group_id, "✅ گزارش شما برای مدیران ارسال شد")
-            print(f"📋 گزارش جدید از {user_name}")
+            bot.send_message(group_id, "گزارش شما برای مدیران ارسال شد")
         return
     
-    # ===== دستورات ادمین (حتی ناشناس) =====
-    print(f"✅ دستور از {user_type}: {text}")
-    
-    # پنل
     if text == 'پنل':
-        bot.send_message(group_id, "🛠 پنل مدیریت", reply_markup=admin_keyboard())
-        print("✅ پنل ارسال شد")
+        bot.send_message(group_id, "پنل مدیریت\n\nروی پیام کاربر ریپلای کنید", reply_markup=admin_keyboard())
         return
     
-    # آمار
     if text == 'آمار':
         top = get_top(group_id, 5)
         total = get_total_msgs(group_id)
         date = get_date()
         time_now = get_time()
         
-        t = f"📊 فعالیت های امروز:\n\n"
-        t += f"📅 تاریخ: {date}\n"
-        t += f"🕐 ساعت: {time_now}\n\n"
-        t += f"💬 کل پیام ها: {total}\n\n"
-        t += "🏆 فعال ترین اعضا:\n"
+        t = f"فعالیت های امروز:\n\n"
+        t += f"تاریخ: {date}\n"
+        t += f"ساعت: {time_now}\n\n"
+        t += f"کل پیام ها: {total}\n\n"
+        t += "فعال ترین اعضا:\n"
         
         if top:
             medals = ['🥇', '🥈', '🥉', '😍', '😍']
             for i, (name, msgs) in enumerate(top):
                 t += f"{medals[i]} {name}: {msgs} پیام\n"
         else:
-            t += "❌ هیچ فعالیتی ثبت نشده است"
+            t += "هیچ فعالیتی ثبت نشده است"
         
         bot.send_message(group_id, t)
-        print("✅ آمار ارسال شد")
         return
     
-    # تنظیم خوش‌آمدگویی
+    # ===== دستورات قفل سرویس‌ها (متنی) =====
+    
+    if text == 'قفل استیکر روشن':
+        update_lock_setting(group_id, 'lock_sticker', 1)
+        bot.send_message(group_id, "قفل استیکر روشن شد\nکاربران عادی نمی‌توانند استیکر ارسال کنند")
+        return
+    
+    if text == 'قفل استیکر خاموش':
+        update_lock_setting(group_id, 'lock_sticker', 0)
+        bot.send_message(group_id, "قفل استیکر خاموش شد\nکاربران می‌توانند استیکر ارسال کنند")
+        return
+    
+    if text == 'قفل گیف روشن':
+        update_lock_setting(group_id, 'lock_gif', 1)
+        bot.send_message(group_id, "قفل گیف روشن شد\nکاربران عادی نمی‌توانند گیف ارسال کنند")
+        return
+    
+    if text == 'قفل گیف خاموش':
+        update_lock_setting(group_id, 'lock_gif', 0)
+        bot.send_message(group_id, "قفل گیف خاموش شد\nکاربران می‌توانند گیف ارسال کنند")
+        return
+    
+    if text == 'قفل ویس روشن':
+        update_lock_setting(group_id, 'lock_voice', 1)
+        bot.send_message(group_id, "قفل ویس روشن شد\nکاربران عادی نمی‌توانند ویس ارسال کنند")
+        return
+    
+    if text == 'قفل ویس خاموش':
+        update_lock_setting(group_id, 'lock_voice', 0)
+        bot.send_message(group_id, "قفل ویس خاموش شد\nکاربران می‌توانند ویس ارسال کنند")
+        return
+    
+    if text == 'قفل ویدیو روشن':
+        update_lock_setting(group_id, 'lock_video', 1)
+        bot.send_message(group_id, "قفل ویدیو روشن شد\nکاربران عادی نمی‌توانند ویدیو ارسال کنند")
+        return
+    
+    if text == 'قفل ویدیو خاموش':
+        update_lock_setting(group_id, 'lock_video', 0)
+        bot.send_message(group_id, "قفل ویدیو خاموش شد\nکاربران می‌توانند ویدیو ارسال کنند")
+        return
+    
+    if text == 'قفل عکس روشن':
+        update_lock_setting(group_id, 'lock_photo', 1)
+        bot.send_message(group_id, "قفل عکس روشن شد\nکاربران عادی نمی‌توانند عکس ارسال کنند")
+        return
+    
+    if text == 'قفل عکس خاموش':
+        update_lock_setting(group_id, 'lock_photo', 0)
+        bot.send_message(group_id, "قفل عکس خاموش شد\nکاربران می‌توانند عکس ارسال کنند")
+        return
+    
+    if text == 'قفل فایل روشن':
+        update_lock_setting(group_id, 'lock_file', 1)
+        bot.send_message(group_id, "قفل فایل روشن شد\nکاربران عادی نمی‌توانند فایل ارسال کنند")
+        return
+    
+    if text == 'قفل فایل خاموش':
+        update_lock_setting(group_id, 'lock_file', 0)
+        bot.send_message(group_id, "قفل فایل خاموش شد\nکاربران می‌توانند فایل ارسال کنند")
+        return
+    
+    if text == 'قفل همه روشن':
+        update_lock_setting(group_id, 'lock_all', 1)
+        bot.send_message(group_id, "قفل همه روشن شد\nکاربران عادی نمی‌توانند هیچ محتوایی ارسال کنند")
+        return
+    
+    if text == 'قفل همه خاموش':
+        update_lock_setting(group_id, 'lock_all', 0)
+        bot.send_message(group_id, "قفل همه خاموش شد\nکاربران می‌توانند محتوا ارسال کنند")
+        return
+    
     if text.startswith('تنظیم خوشامد'):
         new = text.replace('تنظیم خوشامد', '').strip()
         if new:
             set_welcome(group_id, new)
-            bot.send_message(group_id, f"✅ متن خوش‌آمدگویی تنظیم شد:\n\n{new}")
+            bot.send_message(group_id, f"متن خوش‌آمدگویی تنظیم شد:\n\n{new}")
         else:
-            bot.send_message(group_id, "❌ لطفاً متن را وارد کنید:\nتنظیم خوشامد سلام {user} عزیز!")
+            bot.send_message(group_id, "لطفاً متن را وارد کنید:\nتنظیم خوشامد سلام {user} عزیز!")
         return
     
-    # تنظیم تعداد اخطارها
     if text.startswith('تنظیم اخطار'):
         try:
             n = int(text.replace('تنظیم اخطار', '').strip())
             if n < 1:
-                bot.send_message(group_id, "❌ تعداد اخطارها باید حداقل 1 باشد")
+                bot.send_message(group_id, "تعداد اخطارها باید حداقل 1 باشد")
                 return
             set_max_warn(group_id, n)
-            bot.send_message(group_id, f"✅ تعداد اخطارها با موفقیت به {n} تنظیم شد")
+            bot.send_message(group_id, f"تعداد اخطارها با موفقیت به {n} تنظیم شد")
         except:
-            bot.send_message(group_id, "❌ لطفاً یک عدد معتبر وارد کنید:\nتنظیم اخطار 5")
+            bot.send_message(group_id, "لطفاً یک عدد معتبر وارد کنید:\nتنظیم اخطار 5")
         return
     
-    # راهنما
     if text == 'راهنما':
         help_text = (
-            "📖 راهنمای ربات:\n\n"
-            "🔹 دستورات ادمین (با ریپلای):\n"
-            "• بن - اخراج کاربر\n"
-            "• رفع بن - برگرداندن کاربر\n"
-            "• سکوت - سکوت نامحدود\n"
-            "• سکوت 10 - سکوت 10 دقیقه‌ای\n"
-            "• رفع سکوت - برداشتن سکوت\n"
-            "• پین - پین کردن پیام\n"
-            "• حذف پین - حذف پین\n"
-            "• اخطار - اخطار به کاربر\n"
-            "• پاک‌سازی - پاک کردن اخطارها\n\n"
-            "🔹 کاربران عادی:\n"
-            "• گزارش - گزارش پیام (با ریپلای)\n\n"
-            "🔹 دستورات:\n"
-            "• پنل - نمایش پنل مدیریت\n"
-            "• آمار - نمایش آمار\n"
-            "• راهنما - نمایش این راهنما\n"
-            "• تنظیم خوشامد متن - تنظیم خوش‌آمدگویی\n"
-            "• تنظیم اخطار عدد - تنظیم تعداد اخطارها"
+            "راهنمای ربات:\n\n"
+            "دستورات ادمین (با ریپلای):\n"
+            "بن - اخراج کاربر\n"
+            "رفع بن - برگرداندن کاربر\n"
+            "سکوت - سکوت نامحدود\n"
+            "سکوت 10 - سکوت 10 دقیقه‌ای\n"
+            "رفع سکوت - برداشتن سکوت\n"
+            "پین - پین کردن پیام\n"
+            "حذف پین - حذف پین\n"
+            "اخطار - اخطار به کاربر\n"
+            "پاک‌سازی - پاک کردن اخطارها\n\n"
+            "دستورات قفل سرویس‌ها:\n"
+            "قفل استیکر روشن/خاموش\n"
+            "قفل گیف روشن/خاموش\n"
+            "قفل ویس روشن/خاموش\n"
+            "قفل ویدیو روشن/خاموش\n"
+            "قفل عکس روشن/خاموش\n"
+            "قفل فایل روشن/خاموش\n"
+            "قفل همه روشن/خاموش\n\n"
+            "کاربران عادی:\n"
+            "گزارش - گزارش پیام (با ریپلای)\n\n"
+            "دستورات:\n"
+            "پنل - نمایش پنل مدیریت\n"
+            "آمار - نمایش آمار\n"
+            "راهنما - نمایش این راهنما\n"
+            "تنظیم خوشامد متن - تنظیم خوش‌آمدگویی\n"
+            "تنظیم اخطار عدد - تنظیم تعداد اخطارها"
         )
         bot.send_message(group_id, help_text)
         return
@@ -719,66 +596,80 @@ def handle_all_messages(msg):
     if not msg.reply_to_message:
         return
     
-    # اطلاعات کاربر ریپلای شده
-    replied_id = get_user_id(msg.reply_to_message)
-    replied_name = get_user_name(msg.reply_to_message)
-    is_replied_anon = is_anonymous(msg.reply_to_message)
+    replied = msg.reply_to_message.from_user
+    rid = replied.id
     
-    # ===== تگ همه =====
     if text == 'تگ همه':
-        print("🏷️ اجرای تگ همه")
         try:
             all_members = []
+            
             admins = bot.get_chat_administrators(group_id)
             for a in admins:
                 if not a.user.is_bot:
                     all_members.append(f"<a href='tg://user?id={a.user.id}'>{a.user.first_name}</a>")
             
+            try:
+                offset = 0
+                while len(all_members) < 50:
+                    members = bot.get_chat_members(group_id, offset=offset)
+                    if not members:
+                        break
+                    for m in members:
+                        if not m.user.is_bot and m.user.id not in [a.user.id for a in admins]:
+                            all_members.append(f"<a href='tg://user?id={m.user.id}'>{m.user.first_name}</a>")
+                    offset += 50
+            except:
+                pass
+            
             if not all_members:
-                bot.send_message(group_id, "❌ هیچ کاربری برای تگ کردن وجود ندارد")
+                bot.send_message(group_id, "هیچ کاربری برای تگ کردن وجود ندارد")
                 return
             
-            msg_text = "🔔 تگ همه کاربران\n\n" + " ".join(all_members[:50])
-            bot.send_message(group_id, msg_text, parse_mode='HTML', reply_to_message_id=msg.reply_to_message.message_id)
+            msg_text = f"تگ همه کاربران\n\n"
+            msg_text += " ".join(all_members[:50])
+            
+            bot.send_message(
+                group_id,
+                msg_text,
+                parse_mode='HTML',
+                reply_to_message_id=msg.reply_to_message.message_id
+            )
+            
+            if len(all_members) > 50:
+                bot.send_message(group_id, f"{len(all_members[:50])} کاربر از {len(all_members)} تگ شدند")
+            else:
+                bot.send_message(group_id, f"{len(all_members)} کاربر تگ شدند")
             
         except Exception as e:
-            bot.send_message(group_id, f"❌ خطا: {e}")
+            bot.send_message(group_id, f"خطا: {e}")
         return
     
-    # ===== بن =====
     if text == 'بن':
-        print(f"🚫 اجرای بن برای {replied_name}")
-        if replied_id == user_id:
-            bot.send_message(group_id, "❌ نمی‌توانید خود را بن کنید")
+        if rid == user_id:
+            bot.send_message(group_id, "نمی‌توانید خود را بن کنید")
             return
-        if is_group_admin_or_owner(group_id, replied_id) or is_replied_anon:
-            bot.send_message(group_id, "❌ نمی‌توانید ادمین، مالک یا ناشناس را بن کنید")
+        if is_group_admin(group_id, rid):
+            bot.send_message(group_id, "نمی‌توانید ادمین را بن کنید")
             return
         try:
-            bot.ban_chat_member(group_id, replied_id)
-            bot.send_message(group_id, f"🚫 کاربر {replied_name} بن شد", parse_mode='HTML')
-            print(f"✅ بن شد: {replied_name}")
+            bot.ban_chat_member(group_id, rid)
+            bot.send_message(group_id, f"کاربر {get_user_link(replied)} بن شد", parse_mode='HTML')
         except Exception as e:
-            bot.send_message(group_id, f"❌ خطا: {e}")
-        return
+            bot.send_message(group_id, f"خطا: {e}")
     
-    # ===== رفع بن =====
-    if text == 'رفع بن':
+    elif text == 'رفع بن':
         try:
-            bot.unban_chat_member(group_id, replied_id)
-            bot.send_message(group_id, f"✅ بن کاربر {replied_name} برداشته شد", parse_mode='HTML')
+            bot.unban_chat_member(group_id, rid)
+            bot.send_message(group_id, f"بن کاربر {get_user_link(replied)} برداشته شد", parse_mode='HTML')
         except Exception as e:
-            bot.send_message(group_id, f"❌ خطا: {e}")
-        return
+            bot.send_message(group_id, f"خطا: {e}")
     
-    # ===== سکوت =====
-    if text.startswith('سکوت'):
-        print(f"🔇 اجرای سکوت برای {replied_name}")
-        if replied_id == user_id:
-            bot.send_message(group_id, "❌ نمی‌توانید خود را سکوت کنید")
+    elif text.startswith('سکوت'):
+        if rid == user_id:
+            bot.send_message(group_id, "نمی‌توانید خود را سکوت کنید")
             return
-        if is_group_admin_or_owner(group_id, replied_id) or is_replied_anon:
-            bot.send_message(group_id, "❌ نمی‌توانید ادمین، مالک یا ناشناس را سکوت کنید")
+        if is_group_admin(group_id, rid):
+            bot.send_message(group_id, "نمی‌توانید ادمین را سکوت کنید")
             return
         
         minutes = 0
@@ -792,153 +683,72 @@ def handle_all_messages(msg):
         try:
             if minutes > 0:
                 until = int(time.time()) + (minutes * 60)
-                bot.restrict_chat_member(group_id, replied_id, can_send_messages=False, until_date=until)
-                bot.send_message(group_id, f"🔇 کاربر {replied_name} به مدت {minutes} دقیقه سکوت شد", parse_mode='HTML')
+                bot.restrict_chat_member(group_id, rid, can_send_messages=False, until_date=until)
+                bot.send_message(group_id, f"کاربر {get_user_link(replied)} به مدت {minutes} دقیقه سکوت شد", parse_mode='HTML')
             else:
-                bot.restrict_chat_member(group_id, replied_id, can_send_messages=False)
-                bot.send_message(group_id, f"🔇 کاربر {replied_name} سکوت شد", parse_mode='HTML')
+                bot.restrict_chat_member(group_id, rid, can_send_messages=False)
+                bot.send_message(group_id, f"کاربر {get_user_link(replied)} سکوت شد", parse_mode='HTML')
         except Exception as e:
-            bot.send_message(group_id, f"❌ خطا: {e}")
-        return
+            bot.send_message(group_id, f"خطا: {e}")
     
-    # ===== رفع سکوت =====
-    if text == 'رفع سکوت':
+    elif text == 'رفع سکوت':
         try:
-            bot.restrict_chat_member(group_id, replied_id, can_send_messages=True, can_send_media_messages=True)
-            bot.send_message(group_id, f"🔊 سکوت کاربر {replied_name} برداشته شد", parse_mode='HTML')
+            bot.restrict_chat_member(group_id, rid, can_send_messages=True, can_send_media_messages=True)
+            bot.send_message(group_id, f"سکوت کاربر {get_user_link(replied)} برداشته شد", parse_mode='HTML')
         except Exception as e:
-            bot.send_message(group_id, f"❌ خطا: {e}")
-        return
+            bot.send_message(group_id, f"خطا: {e}")
     
-    # ===== پین =====
-    if text == 'پین':
+    elif text == 'پین':
         try:
             bot.pin_chat_message(group_id, msg.reply_to_message.message_id)
-            bot.send_message(group_id, "📌 پیام پین شد")
+            bot.send_message(group_id, "پیام پین شد")
         except Exception as e:
-            bot.send_message(group_id, f"❌ خطا: {e}")
-        return
+            bot.send_message(group_id, f"خطا: {e}")
     
-    # ===== حذف پین =====
-    if text == 'حذف پین':
+    elif text == 'حذف پین':
         try:
             bot.unpin_chat_message(group_id)
-            bot.send_message(group_id, "📌 پین حذف شد")
+            bot.send_message(group_id, "پین حذف شد")
         except Exception as e:
-            bot.send_message(group_id, f"❌ خطا: {e}")
-        return
+            bot.send_message(group_id, f"خطا: {e}")
     
-    # ===== اخطار =====
-    if text == 'اخطار':
-        print(f"⚠️ اجرای اخطار برای {replied_name}")
-        if replied_id == user_id:
-            bot.send_message(group_id, "❌ نمی‌توانید به خود اخطار دهید")
+    elif text == 'اخطار':
+        if rid == user_id:
+            bot.send_message(group_id, "نمی‌توانید به خود اخطار دهید")
             return
-        if is_group_admin_or_owner(group_id, replied_id) or is_replied_anon:
-            bot.send_message(group_id, "❌ نمی‌توانید به ادمین، مالک یا ناشناس اخطار دهید")
+        if is_group_admin(group_id, rid):
+            bot.send_message(group_id, "نمی‌توانید به ادمین اخطار دهید")
             return
         
         max_w = get_max_warn(group_id)
-        warns = add_warn(group_id, replied_id)
+        warns = add_warn(group_id, rid)
         
         if warns >= max_w:
             try:
-                bot.ban_chat_member(group_id, replied_id)
-                clear_warn(group_id, replied_id)
-                bot.send_message(group_id, f"🚫 کاربر {replied_name} بعد از {max_w} اخطار بن شد", parse_mode='HTML')
+                bot.ban_chat_member(group_id, rid)
+                clear_warn(group_id, rid)
+                bot.send_message(group_id, f"کاربر {get_user_link(replied)} بعد از {max_w} اخطار بن شد", parse_mode='HTML')
             except Exception as e:
-                bot.send_message(group_id, f"❌ خطا در بن خودکار: {e}")
+                bot.send_message(group_id, f"خطا در بن خودکار: {e}")
         else:
             remaining = max_w - warns
-            bot.send_message(group_id, f"⚠️ اخطار {warns} از {max_w} برای {replied_name}\n{remaining} اخطار تا بن شدن", parse_mode='HTML')
-        return
+            bot.send_message(group_id, f"اخطار {warns} از {max_w} برای {get_user_link(replied)}\n{remaining} اخطار تا بن شدن", parse_mode='HTML')
     
-    # ===== پاک‌سازی =====
-    if text == 'پاک‌سازی':
-        clear_warn(group_id, replied_id)
-        bot.send_message(group_id, f"✅ اخطارهای {replied_name} پاک شد", parse_mode='HTML')
-        return
+    elif text == 'پاک‌سازی':
+        clear_warn(group_id, rid)
+        bot.send_message(group_id, f"اخطارهای {get_user_link(replied)} پاک شد", parse_mode='HTML')
 
 # ===== دکمه‌ها =====
 @bot.callback_query_handler(func=lambda call: True)
 def callback(call):
     user_id = call.from_user.id
     group_id = call.message.chat.id
+    
+    if not is_admin(user_id) and not is_group_admin(group_id, user_id):
+        return bot.answer_callback_query(call.id, "فقط ادمین‌ها")
+    
     data = call.data
     
-    print(f"🔘 دکمه: {data} از {user_id}")
-    
-    if not is_admin(user_id) and not is_group_admin_or_owner(group_id, user_id):
-        return bot.answer_callback_query(call.id, "فقط ادمین‌ها یا مالک گروه")
-    
-    # ===== تنظیم اخطار =====
-    if data == 'warn_inc':
-        current = get_max_warn(group_id)
-        new_val = current + 1
-        set_max_warn(group_id, new_val)
-        bot.edit_message_text(
-            f"تنظیم تعداد اخطارها\n\nتعداد فعلی: {new_val}",
-            group_id, call.message.message_id,
-            reply_markup=warnings_keyboard(group_id)
-        )
-        bot.answer_callback_query(call.id, f"✅ تعداد اخطارها: {new_val}")
-        return
-    
-    elif data == 'warn_dec':
-        current = get_max_warn(group_id)
-        if current <= 1:
-            return bot.answer_callback_query(call.id, "❌ حداقل 1")
-        new_val = current - 1
-        set_max_warn(group_id, new_val)
-        bot.edit_message_text(
-            f"تنظیم تعداد اخطارها\n\nتعداد فعلی: {new_val}",
-            group_id, call.message.message_id,
-            reply_markup=warnings_keyboard(group_id)
-        )
-        bot.answer_callback_query(call.id, f"✅ تعداد اخطارها: {new_val}")
-        return
-    
-    elif data == 'warn_inc3':
-        current = get_max_warn(group_id)
-        new_val = current + 3
-        set_max_warn(group_id, new_val)
-        bot.edit_message_text(
-            f"تنظیم تعداد اخطارها\n\nتعداد فعلی: {new_val}",
-            group_id, call.message.message_id,
-            reply_markup=warnings_keyboard(group_id)
-        )
-        bot.answer_callback_query(call.id, f"✅ تعداد اخطارها: {new_val}")
-        return
-    
-    elif data == 'warn_dec3':
-        current = get_max_warn(group_id)
-        if current <= 3:
-            return bot.answer_callback_query(call.id, "❌ حداقل 3")
-        new_val = current - 3
-        set_max_warn(group_id, new_val)
-        bot.edit_message_text(
-            f"تنظیم تعداد اخطارها\n\nتعداد فعلی: {new_val}",
-            group_id, call.message.message_id,
-            reply_markup=warnings_keyboard(group_id)
-        )
-        bot.answer_callback_query(call.id, f"✅ تعداد اخطارها: {new_val}")
-        return
-    
-    elif data == 'warn_current':
-        current = get_max_warn(group_id)
-        bot.answer_callback_query(call.id, f"تعداد فعلی: {current}")
-        return
-    
-    elif data == 'back_settings':
-        bot.edit_message_text(
-            "⚙️ تنظیمات گروه",
-            group_id, call.message.message_id,
-            reply_markup=settings_keyboard(group_id)
-        )
-        bot.answer_callback_query(call.id)
-        return
-    
-    # ===== کلیدهای اصلی =====
     if data == 'ban':
         bot.answer_callback_query(call.id, "روی پیام ریپلای کنید و 'بن' بنویسید")
     elif data == 'unban':
@@ -956,21 +766,111 @@ def callback(call):
     elif data == 'clearwarn':
         bot.answer_callback_query(call.id, "روی پیام ریپلای کنید و 'پاک‌سازی' بنویسید")
     
+    elif data == 'tagadmins':
+        admins = get_admins_mention(group_id)
+        if admins:
+            admin_text = " ".join(admins)
+            bot.send_message(group_id, f"توجه ادمین‌ها\n\n{admin_text}", parse_mode='HTML')
+        else:
+            bot.send_message(group_id, "هیچ ادمینی برای تگ کردن وجود ندارد")
+        bot.answer_callback_query(call.id, "تگ ادمین‌ها انجام شد")
+    
     elif data == 'tagall':
         try:
+            all_members = []
+            
             admins = bot.get_chat_administrators(group_id)
-            mentions = []
-            for a in admins[:30]:
+            for a in admins:
                 if not a.user.is_bot:
-                    if a.user.username:
-                        mentions.append(f"@{a.user.username}")
-                    else:
-                        mentions.append(f"[{a.user.first_name}](tg://user?id={a.user.id})")
-            text = "🔔 توجه همه\n\n" + "\n".join(mentions)
-            bot.send_message(group_id, text, parse_mode='Markdown')
-            bot.answer_callback_query(call.id, "تگ انجام شد")
+                    all_members.append(f"<a href='tg://user?id={a.user.id}'>{a.user.first_name}</a>")
+            
+            try:
+                offset = 0
+                while len(all_members) < 50:
+                    members = bot.get_chat_members(group_id, offset=offset)
+                    if not members:
+                        break
+                    for m in members:
+                        if not m.user.is_bot and m.user.id not in [a.user.id for a in admins]:
+                            all_members.append(f"<a href='tg://user?id={m.user.id}'>{m.user.first_name}</a>")
+                    offset += 50
+            except:
+                pass
+            
+            if not all_members:
+                bot.send_message(group_id, "هیچ کاربری برای تگ کردن وجود ندارد")
+                bot.answer_callback_query(call.id)
+                return
+            
+            msg_text = f"تگ همه کاربران\n\n"
+            msg_text += " ".join(all_members[:50])
+            
+            bot.send_message(group_id, msg_text, parse_mode='HTML')
+            
+            if len(all_members) > 50:
+                bot.send_message(group_id, f"{len(all_members[:50])} کاربر از {len(all_members)} تگ شدند")
+            else:
+                bot.send_message(group_id, f"{len(all_members)} کاربر تگ شدند")
+            
         except Exception as e:
-            bot.answer_callback_query(call.id, f"خطا: {e}")
+            bot.send_message(group_id, f"خطا: {e}")
+        bot.answer_callback_query(call.id, "تگ همه انجام شد")
+    
+    elif data == 'lock_menu':
+        try:
+            bot.edit_message_text(
+                "قفل سرویس‌های گروه\n\n"
+                "سرویس مورد نظر را انتخاب کنید:\n"
+                "روشن = کاربران نمی‌توانند ارسال کنند\n"
+                "خاموش = کاربران می‌توانند ارسال کنند",
+                group_id, call.message.message_id,
+                reply_markup=lock_menu_keyboard(group_id)
+            )
+        except Exception as e:
+            if "message is not modified" not in str(e):
+                bot.send_message(group_id, f"خطا: {e}")
+        bot.answer_callback_query(call.id)
+    
+    elif data.startswith('lock_'):
+        parts = data.split('_')
+        setting = parts[1]
+        g_id = int(parts[2])
+        
+        locks = get_lock_settings(g_id)
+        current = locks.get(setting, 0)
+        new_value = 0 if current else 1
+        
+        update_lock_setting(g_id, f'lock_{setting}', new_value)
+        
+        status = "روشن" if new_value else "خاموش"
+        name_map = {
+            'all': 'همه',
+            'sticker': 'استیکر',
+            'gif': 'گیف',
+            'voice': 'ویس',
+            'video': 'ویدیو',
+            'photo': 'عکس',
+            'file': 'فایل'
+        }
+        
+        try:
+            bot.edit_message_text(
+                f"قفل {name_map.get(setting, setting)} {status} شد",
+                group_id, call.message.message_id,
+                reply_markup=lock_menu_keyboard(g_id)
+            )
+        except Exception as e:
+            if "message is not modified" not in str(e):
+                bot.send_message(group_id, f"خطا: {e}")
+            else:
+                try:
+                    bot.edit_message_reply_markup(
+                        group_id, call.message.message_id,
+                        reply_markup=lock_menu_keyboard(g_id)
+                    )
+                except:
+                    pass
+        bot.answer_callback_query(call.id, f"{name_map.get(setting, setting)} {status} شد")
     
     elif data == 'stats':
         top = get_top(group_id, 5)
@@ -978,72 +878,47 @@ def callback(call):
         date = get_date()
         time_now = get_time()
         
-        t = f"📊 فعالیت های امروز:\n\n"
-        t += f"📅 تاریخ: {date}\n"
-        t += f"🕐 ساعت: {time_now}\n\n"
-        t += f"💬 کل پیام ها: {total}\n\n"
-        t += "🏆 فعال ترین اعضا:\n"
+        t = f"فعالیت های امروز:\n\n"
+        t += f"تاریخ: {date}\n"
+        t += f"ساعت: {time_now}\n\n"
+        t += f"کل پیام ها: {total}\n\n"
+        t += "فعال ترین اعضا:\n"
         
         if top:
             medals = ['🥇', '🥈', '🥉', '😍', '😍']
             for i, (name, msgs) in enumerate(top):
                 t += f"{medals[i]} {name}: {msgs} پیام\n"
         else:
-            t += "❌ هیچ فعالیتی ثبت نشده است"
+            t += "هیچ فعالیتی ثبت نشده است"
         
         bot.edit_message_text(t, group_id, call.message.message_id)
         bot.answer_callback_query(call.id)
     
     elif data == 'settings':
         bot.edit_message_text(
-            "⚙️ تنظیمات گروه\n\n"
-            "روشن/خاموش کردن هر فیلتر:",
-            group_id, call.message.message_id,
-            reply_markup=settings_keyboard(group_id)
-        )
-        bot.answer_callback_query(call.id)
-    
-    elif data == 'set_welcome':
-        bot.edit_message_text(
-            "تنظیم متن خوش‌آمدگویی\n\n"
-            "دستور: تنظیم خوشامد متن جدید\n\n"
-            "مثال: تنظیم خوشامد سلام {user} عزیز!",
+            "تنظیمات گروه\n\n"
+            "برای تنظیم متن خوش‌آمدگویی:\n"
+            "تنظیم خوشامد متن جدید\n\n"
+            "برای تنظیم تعداد اخطارها:\n"
+            "تنظیم اخطار عدد\n\n"
+            "متن خوش‌آمدگویی پیش‌فرض:\n"
+            "به گروه خوش آمدی {user}",
             group_id, call.message.message_id
-        )
-        bot.answer_callback_query(call.id)
-    
-    elif data == 'set_warnings':
-        current = get_max_warn(group_id)
-        bot.edit_message_text(
-            f"تنظیم تعداد اخطارها\n\nتعداد فعلی: {current}\n\nبا دکمه‌های زیر کم/زیاد کنید:",
-            group_id, call.message.message_id,
-            reply_markup=warnings_keyboard(group_id)
         )
         bot.answer_callback_query(call.id)
     
     elif data == 'back_main':
         bot.edit_message_text(
-            "🛠 پنل مدیریت",
+            "پنل مدیریت\n\nروی پیام کاربر ریپلای کنید",
             group_id, call.message.message_id,
             reply_markup=admin_keyboard()
         )
         bot.answer_callback_query(call.id)
     
-    elif data.startswith('toggle_'):
-        filter_name = data.replace('toggle_', '')
-        toggle_filter(group_id, filter_name)
-        bot.edit_message_text(
-            "⚙️ تنظیمات گروه\n\n"
-            "روشن/خاموش کردن هر فیلتر:",
-            group_id, call.message.message_id,
-            reply_markup=settings_keyboard(group_id)
-        )
-        bot.answer_callback_query(call.id, f"✅ فیلتر {filter_name} تغییر کرد")
-    
     elif data.startswith('res_'):
         report_id = int(data.replace('res_', ''))
         upd_report(report_id, 'resolved')
-        bot.edit_message_text(call.message.text + "\n\n✅ بررسی شد", group_id, call.message.message_id)
+        bot.edit_message_text(call.message.text + "\n\nبررسی شد", group_id, call.message.message_id)
         bot.answer_callback_query(call.id, "گزارش بررسی شد")
     
     elif data.startswith('del_'):
@@ -1054,31 +929,33 @@ def callback(call):
 
 # ===== اجرا =====
 if __name__ == '__main__':
-    print("=" * 70)
-    print("🤖 ربات مدیریت گروه - نسخه کامل")
-    print("=" * 70)
-    print(f"👑 ادمین اصلی: {ADMIN_ID}")
-    print(f"📱 نام کاربری: @{bot.get_me().username}")
-    print("=" * 70)
-    print("✅ قابلیت‌ها:")
-    print("• ذخیره خودکار گروه در دیتابیس")
-    print("• بررسی خودکار ادمین‌های گروه")
-    print("• تشخیص ناشناس و پاسخگویی")
-    print("• قفل لینک، گیف، استیکر، فوروارد، عکس، ویدیو، آهنگ، ویس")
-    print("• تنظیم اخطار با دکمه (+1, -1, +3, -3)")
-    print("• سیستم اخطار و بن خودکار")
-    print("• سیستم گزارش با تگ ادمین‌ها")
-    print("• تگ همه کاربران")
-    print("=" * 70)
-    print("📝 دیباگ فعال است...")
-    print("-" * 70)
-    
-    # شروع ترد به‌روزرسانی خودکار ادمین‌ها
-    admin_thread = threading.Thread(target=auto_update_admins, daemon=True)
-    admin_thread.start()
-    print("✅ ترد به‌روزرسانی خودکار ادمین‌ها شروع شد")
+    print("=" * 50)
+    print("ربات مدیریت گروه")
+    print("=" * 50)
+    print(f"ادمین: {ADMIN_ID}")
+    print(f"نام کاربری: @{bot.get_me().username}")
+    print("=" * 50)
+    print("دستورات:")
+    print("پنل - نمایش پنل مدیریت")
+    print("آمار - نمایش آمار")
+    print("راهنما - نمایش راهنما")
+    print("بن/رفع بن - با ریپلای")
+    print("سکوت 10 - سکوت ۱۰ دقیقه‌ای")
+    print("اخطار - اخطار به کاربر")
+    print("تگ همه - تگ همه کاربران (با ریپلای)")
+    print("گزارش - کاربران عادی (با ریپلای)")
+    print("قفل استیکر روشن/خاموش - قفل استیکر")
+    print("قفل گیف روشن/خاموش - قفل گیف")
+    print("قفل ویس روشن/خاموش - قفل ویس")
+    print("قفل ویدیو روشن/خاموش - قفل ویدیو")
+    print("قفل عکس روشن/خاموش - قفل عکس")
+    print("قفل فایل روشن/خاموش - قفل فایل")
+    print("قفل همه روشن/خاموش - قفل همه")
+    print("تنظیم خوشامد متن - تنظیم خوش‌آمدگویی")
+    print("تنظیم اخطار عدد - تنظیم تعداد اخطارها")
+    print("=" * 50)
     
     try:
         bot.infinity_polling(timeout=10)
     except Exception as e:
-        print(f"❌ خطا: {e}")
+        print(f"خطا: {e}")
