@@ -25,14 +25,8 @@ bot.parse_mode = 'HTML'
 conn = sqlite3.connect('bot.db', check_same_thread=False)
 c = conn.cursor()
 
-# حذف جدول‌های قدیمی و ساخت دوباره
-c.execute("DROP TABLE IF EXISTS groups")
-c.execute("DROP TABLE IF EXISTS users")
-c.execute("DROP TABLE IF EXISTS members")
-c.execute("DROP TABLE IF EXISTS reports")
-
 c.execute('''
-    CREATE TABLE groups (
+    CREATE TABLE IF NOT EXISTS groups (
         group_id INTEGER PRIMARY KEY,
         welcome_text TEXT,
         max_warnings INTEGER DEFAULT 3,
@@ -47,7 +41,7 @@ c.execute('''
 ''')
 
 c.execute('''
-    CREATE TABLE users (
+    CREATE TABLE IF NOT EXISTS users (
         user_id INTEGER PRIMARY KEY,
         name TEXT,
         join_date TEXT
@@ -55,7 +49,7 @@ c.execute('''
 ''')
 
 c.execute('''
-    CREATE TABLE members (
+    CREATE TABLE IF NOT EXISTS members (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         group_id INTEGER,
         user_id INTEGER,
@@ -68,7 +62,7 @@ c.execute('''
 ''')
 
 c.execute('''
-    CREATE TABLE reports (
+    CREATE TABLE IF NOT EXISTS reports (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         group_id INTEGER,
         reporter_id INTEGER,
@@ -80,8 +74,36 @@ c.execute('''
     )
 ''')
 
+try:
+    c.execute("ALTER TABLE groups ADD COLUMN lock_sticker INTEGER DEFAULT 0")
+except:
+    pass
+try:
+    c.execute("ALTER TABLE groups ADD COLUMN lock_gif INTEGER DEFAULT 0")
+except:
+    pass
+try:
+    c.execute("ALTER TABLE groups ADD COLUMN lock_voice INTEGER DEFAULT 0")
+except:
+    pass
+try:
+    c.execute("ALTER TABLE groups ADD COLUMN lock_video INTEGER DEFAULT 0")
+except:
+    pass
+try:
+    c.execute("ALTER TABLE groups ADD COLUMN lock_photo INTEGER DEFAULT 0")
+except:
+    pass
+try:
+    c.execute("ALTER TABLE groups ADD COLUMN lock_file INTEGER DEFAULT 0")
+except:
+    pass
+try:
+    c.execute("ALTER TABLE groups ADD COLUMN lock_all INTEGER DEFAULT 0")
+except:
+    pass
+
 conn.commit()
-print("✅ دیتابیس با موفقیت ساخته شد")
 
 # ===== توابع دیتابیس =====
 def get_welcome(group_id):
@@ -145,6 +167,13 @@ def add_warn(group_id, user_id):
 def clear_warn(group_id, user_id):
     c.execute('UPDATE members SET warnings = 0 WHERE group_id = ? AND user_id = ?', (group_id, user_id))
     conn.commit()
+
+def remove_one_warn(group_id, user_id):
+    c.execute('UPDATE members SET warnings = warnings - 1 WHERE group_id = ? AND user_id = ? AND warnings > 0', (group_id, user_id))
+    conn.commit()
+    c.execute('SELECT warnings FROM members WHERE group_id = ? AND user_id = ?', (group_id, user_id))
+    r = c.fetchone()
+    return r[0] if r else 0
 
 def mute_user(group_id, user_id):
     c.execute('UPDATE members SET muted = 1 WHERE group_id = ? AND user_id = ?', (group_id, user_id))
@@ -250,6 +279,7 @@ def admin_keyboard():
     )
     kb.add(
         InlineKeyboardButton("اخطار", callback_data="warn"),
+        InlineKeyboardButton("حذف اخطار", callback_data="removewarn"),
         InlineKeyboardButton("پاک‌سازی", callback_data="clearwarn")
     )
     kb.add(
@@ -423,7 +453,6 @@ def handle(msg):
             
             report_id = add_report(group_id, user_id, reported.id, msg.reply_to_message.message_id, reason)
             
-            # تگ مخفی ادمین‌ها
             admin_mentions = get_admins_mention(group_id)
             admin_text = " ".join(admin_mentions) if admin_mentions else ""
             
@@ -575,7 +604,8 @@ def handle(msg):
             "• پین - پین کردن پیام\n"
             "• حذف پین - حذف پین\n"
             "• اخطار - اخطار به کاربر\n"
-            "• پاک‌سازی - پاک کردن اخطارها\n\n"
+            "• حذف اخطار - حذف یک اخطار\n"
+            "• پاک‌سازی - پاک کردن همه اخطارها\n\n"
             "🔹 دستورات قفل سرویس‌ها:\n"
             "• قفل استیکر روشن/خاموش\n"
             "• قفل گیف روشن/خاموش\n"
@@ -676,7 +706,6 @@ def handle(msg):
             bot.send_message(group_id, "❌ نمی‌توانید ادمین را سکوت کنید")
             return
         
-        # بررسی اینکه کاربر قبلاً سکوت هست یا نه
         if is_muted(group_id, rid):
             bot.send_message(group_id, f"ℹ️ کاربر {get_user_link(replied)} قبلاً سکوت است", parse_mode='HTML')
             return
@@ -711,7 +740,6 @@ def handle(msg):
             bot.send_message(group_id, "❌ نمی‌توانید خود را رفع سکوت کنید")
             return
         
-        # بررسی اینکه کاربر واقعاً سکوت هست یا نه
         if not is_muted(group_id, rid):
             bot.send_message(group_id, f"ℹ️ کاربر {get_user_link(replied)} سکوت نیست", parse_mode='HTML')
             return
@@ -747,6 +775,7 @@ def handle(msg):
         except Exception as e:
             bot.send_message(group_id, f"❌ خطا: {e}")
     
+    # ===== اخطار =====
     elif text == 'اخطار':
         if rid == user_id:
             bot.send_message(group_id, "❌ نمی‌توانید به خود اخطار دهید")
@@ -769,9 +798,48 @@ def handle(msg):
             remaining = max_w - warns
             bot.send_message(group_id, f"⚠️ اخطار {warns} از {max_w} برای {get_user_link(replied)}\n{remaining} اخطار تا بن شدن", parse_mode='HTML')
     
+    # ===== حذف اخطار (یک عدد) =====
+    elif text == 'حذف اخطار':
+        if rid == user_id:
+            bot.send_message(group_id, "❌ نمی‌توانید از خودتان اخطار حذف کنید")
+            return
+        if is_group_admin(group_id, rid):
+            bot.send_message(group_id, "❌ ادمین اخطار ندارد")
+            return
+        
+        # بررسی تعداد اخطارهای کاربر
+        c.execute('SELECT warnings FROM members WHERE group_id = ? AND user_id = ?', (group_id, rid))
+        r = c.fetchone()
+        current_warns = r[0] if r else 0
+        
+        if current_warns <= 0:
+            bot.send_message(group_id, f"ℹ️ کاربر {get_user_link(replied)} اخطاری ندارد", parse_mode='HTML')
+            return
+        
+        # کاهش یک اخطار
+        new_warns = remove_one_warn(group_id, rid)
+        
+        bot.send_message(group_id, f"✅ یک اخطار از {get_user_link(replied)} حذف شد\nتعداد اخطارهای فعلی: {new_warns}", parse_mode='HTML')
+    
+    # ===== پاک‌سازی (همه اخطارها) =====
     elif text == 'پاک‌سازی':
+        if rid == user_id:
+            bot.send_message(group_id, "❌ نمی‌توانید اخطارهای خود را پاک کنید")
+            return
+        if is_group_admin(group_id, rid):
+            bot.send_message(group_id, "❌ ادمین اخطار ندارد")
+            return
+        
+        c.execute('SELECT warnings FROM members WHERE group_id = ? AND user_id = ?', (group_id, rid))
+        r = c.fetchone()
+        current_warns = r[0] if r else 0
+        
+        if current_warns <= 0:
+            bot.send_message(group_id, f"ℹ️ کاربر {get_user_link(replied)} اخطاری ندارد", parse_mode='HTML')
+            return
+        
         clear_warn(group_id, rid)
-        bot.send_message(group_id, f"✅ اخطارهای {get_user_link(replied)} پاک شد", parse_mode='HTML')
+        bot.send_message(group_id, f"✅ همه اخطارهای {get_user_link(replied)} پاک شد", parse_mode='HTML')
 
 # ===== دکمه‌ها =====
 @bot.callback_query_handler(func=lambda call: True)
@@ -798,6 +866,8 @@ def callback(call):
         bot.answer_callback_query(call.id, "'حذف پین' را بنویسید")
     elif data == 'warn':
         bot.answer_callback_query(call.id, "روی پیام ریپلای کنید و 'اخطار' بنویسید")
+    elif data == 'removewarn':
+        bot.answer_callback_query(call.id, "روی پیام ریپلای کنید و 'حذف اخطار' بنویسید")
     elif data == 'clearwarn':
         bot.answer_callback_query(call.id, "روی پیام ریپلای کنید و 'پاک‌سازی' بنویسید")
     
@@ -978,6 +1048,8 @@ if __name__ == '__main__':
     print("سکوت 10 - سکوت ۱۰ دقیقه‌ای")
     print("رفع سکوت - رفع سکوت (با ریپلای)")
     print("اخطار - اخطار به کاربر")
+    print("حذف اخطار - حذف یک اخطار (با ریپلای)")
+    print("پاک‌سازی - پاک کردن همه اخطارها (با ریپلای)")
     print("تگ همه - تگ همه کاربران (با ریپلای)")
     print("گزارش - کاربران عادی (با ریپلای)")
     print("قفل استیکر روشن/خاموش - قفل استیکر")
