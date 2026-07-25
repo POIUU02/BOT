@@ -331,26 +331,25 @@ def welcome(msg):
             bot.send_message(group_id, "ربات با موفقیت به گروه اضافه شد")
             return
         
-        # ذخیره کاربر با تاریخ عضویت
-        now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        c.execute('INSERT OR IGNORE INTO users (user_id, name, join_date) VALUES (?, ?, ?)', (m.id, m.first_name, now))
-        conn.commit()
+        # ذخیره کاربر
+        add_user(m.id, m.first_name)
         add_member(group_id, m.id)
         
         # ساخت پیام خوش‌آمدگویی
-        user_mention = get_user_mention(m)
-        group_name = msg.chat.title
-        join_date = get_persian_date()
+        user_mention = get_user_mention(m)  # تگ کاربر
+        group_name = msg.chat.title  # اسم گروه
+        join_date = get_persian_date()  # تاریخ عضویت
         
-        # متن خوش‌آمدگویی ثابت
-        welcome_msg = f"{user_mention} به گروه {group_name} خوش آمدید. 👋\n\n"
+        # پیام خوش‌آمدگویی
+        welcome_msg = f"سلام {user_mention} عزیز\n"
+        welcome_msg += f"به گروه {group_name} خوش آمدید 👋\n\n"
         
-        # اضافه کردن متن تنظیم شده اگر وجود داشته باشد
+        # متن دلخواه ادمین (اگر تنظیم شده باشد)
         custom_text = get_welcome(group_id)
         if custom_text:
             welcome_msg += f"{custom_text}\n\n"
         
-        # تاریخ عضویت (فقط تاریخ)
+        # تاریخ عضویت
         welcome_msg += f"تاریخ عضویت: {join_date}"
         
         bot.send_message(group_id, welcome_msg, parse_mode='HTML')
@@ -900,8 +899,8 @@ def callback(call):
             "تنظیم خوشامد متن جدید\n\n"
             "برای تنظیم تعداد اخطارها:\n"
             "تنظیم اخطار عدد\n\n"
-            "متن خوش‌آمدگویی ثابت:\n"
-            "سلام {user} به گروه {group} خوش آمدید. 👋\n\n"
+            "متن خوش‌آمدگویی:\n"
+            "سلام {user} عزیز\nبه گروه {group} خوش آمدید 👋\n\n"
             "[متن دلخواه شما]\n\n"
             "تاریخ عضویت: {date}",
             group_id, call.message.message_id
