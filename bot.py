@@ -12,7 +12,7 @@ from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 # ===== گرفتن توکن از متغیر محیطی =====
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID"))
+ADMIN_ID = int(os.getenv("ADMIN_ID", "6443963679"))
 
 if not BOT_TOKEN:
     print("❌ توکن ربات پیدا نشد! متغیر BOT_TOKEN را تنظیم کنید.")
