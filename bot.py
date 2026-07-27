@@ -5,6 +5,7 @@ import os
 import sqlite3
 import time
 import re
+import requests
 from datetime import datetime
 import jdatetime
 import telebot
@@ -18,7 +19,18 @@ if not BOT_TOKEN:
     print("❌ توکن ربات پیدا نشد! متغیر BOT_TOKEN را تنظیم کنید.")
     exit(1)
 
-bot = telebot.TeleBot(BOT_TOKEN)
+# ===== تنظیمات تایم‌اوت =====
+try:
+    # تست اتصال به تلگرام
+    test_url = f"https://api.telegram.org/bot{BOT_TOKEN}/getMe"
+    response = requests.get(test_url, timeout=10)
+    print("✅ اتصال به تلگرام برقرار شد")
+except Exception as e:
+    print(f"❌ خطا در اتصال به تلگرام: {e}")
+    print("🔄 تلاش مجدد در 5 ثانیه...")
+    time.sleep(5)
+
+bot = telebot.TeleBot(BOT_TOKEN, timeout=60)
 bot.parse_mode = 'HTML'
 
 # ===== دیتابیس =====
@@ -104,6 +116,7 @@ except:
     pass
 
 conn.commit()
+print("✅ دیتابیس آماده است")
 
 # ===== توابع دیتابیس =====
 def get_welcome(group_id):
@@ -807,7 +820,6 @@ def handle(msg):
             bot.send_message(group_id, "❌ ادمین اخطار ندارد")
             return
         
-        # بررسی تعداد اخطارهای کاربر
         c.execute('SELECT warnings FROM members WHERE group_id = ? AND user_id = ?', (group_id, rid))
         r = c.fetchone()
         current_warns = r[0] if r else 0
@@ -816,9 +828,7 @@ def handle(msg):
             bot.send_message(group_id, f"ℹ️ کاربر {get_user_link(replied)} اخطاری ندارد", parse_mode='HTML')
             return
         
-        # کاهش یک اخطار
         new_warns = remove_one_warn(group_id, rid)
-        
         bot.send_message(group_id, f"✅ یک اخطار از {get_user_link(replied)} حذف شد\nتعداد اخطارهای فعلی: {new_warns}", parse_mode='HTML')
     
     # ===== پاک‌سازی (همه اخطارها) =====
@@ -1037,8 +1047,23 @@ if __name__ == '__main__':
     print("=" * 50)
     print("ربات مدیریت گروه")
     print("=" * 50)
+    
+    try:
+        me = bot.get_me()
+        print(f"نام کاربری: @{me.username}")
+        print(f"شناسه: {me.id}")
+    except Exception as e:
+        print(f"❌ خطا در دریافت اطلاعات ربات: {e}")
+        print("🔄 تلاش مجدد...")
+        time.sleep(3)
+        try:
+            me = bot.get_me()
+            print(f"نام کاربری: @{me.username}")
+        except:
+            print("❌ خطا! ربات به تلگرام متصل نشد.")
+            print("💡 مطمئن شوید توکن درست است و اینترنت وصل است.")
+    
     print(f"ادمین: {ADMIN_ID}")
-    print(f"نام کاربری: @{bot.get_me().username}")
     print("=" * 50)
     print("دستورات:")
     print("پنل - نمایش پنل مدیریت")
@@ -1063,7 +1088,10 @@ if __name__ == '__main__':
     print("تنظیم اخطار عدد - تنظیم تعداد اخطارها")
     print("=" * 50)
     
-    try:
-        bot.infinity_polling(timeout=10)
-    except Exception as e:
-        print(f"خطا: {e}")
+    while True:
+        try:
+            bot.infinity_polling(timeout=60)
+        except Exception as e:
+            print(f"❌ خطا در polling: {e}")
+            print("🔄 تلاش مجدد در 5 ثانیه...")
+            time.sleep(5)
