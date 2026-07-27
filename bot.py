@@ -9,6 +9,10 @@ from datetime import datetime
 import jdatetime
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+from telebot import apihelper
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 # ===== گرفتن توکن از متغیر محیطی =====
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -18,7 +22,26 @@ if not BOT_TOKEN:
     print("❌ توکن ربات پیدا نشد! متغیر BOT_TOKEN را تنظیم کنید.")
     exit(1)
 
+# ===== تنظیمات اتصال به تلگرام با timeout بیشتر و retry =====
+apihelper.CONNECT_TIMEOUT = 60
+apihelper.READ_TIMEOUT = 60
+
+# ایجاد Session با Retry
+session = requests.Session()
+retry = Retry(
+    total=5,
+    read=5,
+    connect=5,
+    backoff_factor=0.5,
+    status_forcelist=[500, 502, 503, 504]
+)
+adapter = HTTPAdapter(max_retries=retry)
+session.mount('http://', adapter)
+session.mount('https://', adapter)
+
+# ===== راه‌اندازی ربات =====
 bot = telebot.TeleBot(BOT_TOKEN)
+bot.session = session
 bot.parse_mode = 'HTML'
 
 # ===== دیتابیس =====
@@ -74,6 +97,7 @@ c.execute('''
     )
 ''')
 
+# اضافه کردن ستون‌های جدید در صورت نیاز
 try:
     c.execute("ALTER TABLE groups ADD COLUMN lock_sticker INTEGER DEFAULT 0")
 except:
@@ -332,11 +356,17 @@ def report_keyboard(report_id):
 @bot.message_handler(commands=['start'])
 def start(msg):
     if msg.chat.type == 'private':
+        try:
+            bot_info = bot.get_me()
+            username = bot_info.username
+        except:
+            username = "GroupManagerBot"
+        
         bot.send_message(msg.chat.id, 
             "به ربات مدیریت گروه خوش آمدید\n\n"
             "ربات را به گروه اضافه کنید و ادمین کنید",
             reply_markup=InlineKeyboardMarkup().add(
-                InlineKeyboardButton("افزودن به گروه", url=f"https://t.me/{bot.get_me().username}?startgroup=botstart")
+                InlineKeyboardButton("افزودن به گروه", url=f"https://t.me/{username}?startgroup=botstart")
             )
         )
 
@@ -1032,13 +1062,38 @@ def callback(call):
         bot.delete_message(group_id, call.message.message_id)
         bot.answer_callback_query(call.id, "گزارش حذف شد")
 
+# ===== تابع تست اتصال =====
+def test_connection():
+    try:
+        import socket
+        socket.create_connection(("api.telegram.org", 443), timeout=10)
+        print("✅ اتصال به Telegram API برقرار است")
+        return True
+    except Exception as e:
+        print(f"❌ اتصال به Telegram API برقرار نیست: {e}")
+        return False
+
 # ===== اجرا =====
 if __name__ == '__main__':
     print("=" * 50)
     print("ربات مدیریت گروه")
     print("=" * 50)
     print(f"ادمین: {ADMIN_ID}")
-    print(f"نام کاربری: @{bot.get_me().username}")
+    
+    # تست اتصال
+    test_connection()
+    
+    # دریافت اطلاعات ربات با مدیریت خطا
+    try:
+        bot_info = bot.get_me()
+        print(f"نام کاربری: @{bot_info.username}")
+        print(f"نام ربات: {bot_info.first_name}")
+        print(f"آیدی: {bot_info.id}")
+    except Exception as e:
+        print(f"⚠️ خطا در دریافت اطلاعات ربات: {e}")
+        print("⚠️ ممکن است اینترنت یا دسترسی به API تلگرام مشکل داشته باشد")
+        print("⚠️ ربات با این وجود اجرا می‌شود...")
+    
     print("=" * 50)
     print("دستورات:")
     print("پنل - نمایش پنل مدیریت")
@@ -1062,8 +1117,21 @@ if __name__ == '__main__':
     print("تنظیم خوشامد متن - تنظیم متن اضافی خوش‌آمدگویی")
     print("تنظیم اخطار عدد - تنظیم تعداد اخطارها")
     print("=" * 50)
+    print("🔄 ربات در حال اجرا...")
     
     try:
-        bot.infinity_polling(timeout=10)
+        # استفاده از infinity_polling با timeout بیشتر
+        bot.infinity_polling(timeout=60, long_polling_timeout=60)
+    except KeyboardInterrupt:
+        print("\n⏹️ ربات متوقف شد")
     except Exception as e:
-        print(f"خطا: {e}")
+        print(f"❌ خطا در اجرای ربات: {e}")
+        # تلاش مجدد با روش دیگر
+        try:
+            print("🔄 تلاش مجدد با روش polling معمولی...")
+            bot.polling(none_stop=True, interval=1, timeout=60)
+        except Exception as e2:
+            print(f"❌ خطا در polling: {e2}")
+    finally:
+        conn.close()
+        print("👋 ربات بسته شد")
