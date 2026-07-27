@@ -5,6 +5,7 @@ import os
 import sqlite3
 import time
 import re
+import socket
 from datetime import datetime
 import jdatetime
 import telebot
@@ -1062,15 +1063,21 @@ def callback(call):
         bot.delete_message(group_id, call.message.message_id)
         bot.answer_callback_query(call.id, "گزارش حذف شد")
 
-# ===== تابع تست اتصال =====
+# ===== تست اتصال =====
 def test_connection():
     try:
-        import socket
-        socket.create_connection(("api.telegram.org", 443), timeout=10)
-        print("✅ اتصال به Telegram API برقرار است")
-        return True
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(5)
+        result = sock.connect_ex(('api.telegram.org', 443))
+        sock.close()
+        if result == 0:
+            print("✅ اتصال به Telegram API برقرار است")
+            return True
+        else:
+            print("⚠️ اتصال به Telegram API با مشکل مواجه است")
+            return False
     except Exception as e:
-        print(f"❌ اتصال به Telegram API برقرار نیست: {e}")
+        print(f"⚠️ تست اتصال ناموفق بود: {e}")
         return False
 
 # ===== اجرا =====
@@ -1083,45 +1090,32 @@ if __name__ == '__main__':
     # تست اتصال
     test_connection()
     
-    # دریافت اطلاعات ربات با مدیریت خطا
+    # دریافت اطلاعات ربات با timeout کوتاه
+    bot_username = "GroupManagerBot"  # مقدار پیش‌فرض
     try:
+        # تنظیم timeout کمتر برای این درخواست
+        apihelper.CONNECT_TIMEOUT = 10
+        apihelper.READ_TIMEOUT = 10
+        
         bot_info = bot.get_me()
-        print(f"نام کاربری: @{bot_info.username}")
+        bot_username = bot_info.username
+        print(f"نام کاربری: @{bot_username}")
         print(f"نام ربات: {bot_info.first_name}")
         print(f"آیدی: {bot_info.id}")
     except Exception as e:
-        print(f"⚠️ خطا در دریافت اطلاعات ربات: {e}")
-        print("⚠️ ممکن است اینترنت یا دسترسی به API تلگرام مشکل داشته باشد")
-        print("⚠️ ربات با این وجود اجرا می‌شود...")
+        print(f"⚠️ دریافت اطلاعات ربات با خطا مواجه شد (timeout)")
+        print(f"⚠️ استفاده از نام کاربری پیش‌فرض: @{bot_username}")
     
-    print("=" * 50)
-    print("دستورات:")
-    print("پنل - نمایش پنل مدیریت")
-    print("آمار - نمایش آمار")
-    print("راهنما - نمایش راهنما")
-    print("بن/رفع بن - با ریپلای")
-    print("سکوت 10 - سکوت ۱۰ دقیقه‌ای")
-    print("رفع سکوت - رفع سکوت (با ریپلای)")
-    print("اخطار - اخطار به کاربر")
-    print("حذف اخطار - حذف یک اخطار (با ریپلای)")
-    print("پاک‌سازی - پاک کردن همه اخطارها (با ریپلای)")
-    print("تگ همه - تگ همه کاربران (با ریپلای)")
-    print("گزارش - کاربران عادی (با ریپلای)")
-    print("قفل استیکر روشن/خاموش - قفل استیکر")
-    print("قفل گیف روشن/خاموش - قفل گیف")
-    print("قفل ویس روشن/خاموش - قفل ویس")
-    print("قفل ویدیو روشن/خاموش - قفل ویدیو")
-    print("قفل عکس روشن/خاموش - قفل عکس")
-    print("قفل فایل روشن/خاموش - قفل فایل")
-    print("قفل همه روشن/خاموش - قفل همه")
-    print("تنظیم خوشامد متن - تنظیم متن اضافی خوش‌آمدگویی")
-    print("تنظیم اخطار عدد - تنظیم تعداد اخطارها")
+    # برگرداندن timeout به حالت عادی برای polling
+    apihelper.CONNECT_TIMEOUT = 60
+    apihelper.READ_TIMEOUT = 60
+    
     print("=" * 50)
     print("🔄 ربات در حال اجرا...")
     
     try:
-        # استفاده از infinity_polling با timeout بیشتر
-        bot.infinity_polling(timeout=60, long_polling_timeout=60)
+        # استفاده از infinity_polling با timeout مناسب
+        bot.infinity_polling(timeout=30, long_polling_timeout=30)
     except KeyboardInterrupt:
         print("\n⏹️ ربات متوقف شد")
     except Exception as e:
@@ -1129,7 +1123,7 @@ if __name__ == '__main__':
         # تلاش مجدد با روش دیگر
         try:
             print("🔄 تلاش مجدد با روش polling معمولی...")
-            bot.polling(none_stop=True, interval=1, timeout=60)
+            bot.polling(none_stop=True, interval=0, timeout=30)
         except Exception as e2:
             print(f"❌ خطا در polling: {e2}")
     finally:
