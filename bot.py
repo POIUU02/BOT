@@ -5,15 +5,10 @@ import os
 import sqlite3
 import time
 import re
-import socket
 from datetime import datetime
 import jdatetime
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
-from telebot import apihelper
-import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 
 # ===== گرفتن توکن از متغیر محیطی =====
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -23,51 +18,8 @@ if not BOT_TOKEN:
     print("❌ توکن ربات پیدا نشد! متغیر BOT_TOKEN را تنظیم کنید.")
     exit(1)
 
-# ===== تنظیمات اتصال به تلگرام =====
-apihelper.CONNECT_TIMEOUT = 30
-apihelper.READ_TIMEOUT = 30
-
-# ایجاد Session با Retry
-session = requests.Session()
-retry = Retry(
-    total=3,
-    read=3,
-    connect=3,
-    backoff_factor=0.5,
-    status_forcelist=[500, 502, 503, 504]
-)
-adapter = HTTPAdapter(max_retries=retry)
-session.mount('http://', adapter)
-session.mount('https://', adapter)
-
-# ===== راه‌اندازی ربات با غیرفعال کردن get_me =====
 bot = telebot.TeleBot(BOT_TOKEN)
-bot.session = session
 bot.parse_mode = 'HTML'
-
-# غیرفعال کردن دریافت اطلاعات ربات در حین اجرا
-# با این کار از timeout در polling جلوگیری می‌شود
-import types
-def get_me_skip(self):
-    """جلوگیری از دریافت اطلاعات ربات در حین polling"""
-    if not hasattr(self, '_cached_user'):
-        try:
-            self._cached_user = telebot.types.User(
-                id=0,
-                is_bot=True,
-                first_name="GroupManagerBot",
-                username="GroupManagerBot"
-            )
-        except:
-            self._cached_user = telebot.types.User(
-                id=0,
-                is_bot=True,
-                first_name="GroupManagerBot"
-            )
-    return self._cached_user
-
-# جایگزین کردن متد get_me با نسخه کش شده
-bot.get_me = types.MethodType(get_me_skip, bot)
 
 # ===== دیتابیس =====
 conn = sqlite3.connect('bot.db', check_same_thread=False)
@@ -122,7 +74,6 @@ c.execute('''
     )
 ''')
 
-# اضافه کردن ستون‌های جدید در صورت نیاز
 try:
     c.execute("ALTER TABLE groups ADD COLUMN lock_sticker INTEGER DEFAULT 0")
 except:
@@ -381,12 +332,11 @@ def report_keyboard(report_id):
 @bot.message_handler(commands=['start'])
 def start(msg):
     if msg.chat.type == 'private':
-        username = "GroupManagerBot"  # نام پیش‌فرض
         bot.send_message(msg.chat.id, 
             "به ربات مدیریت گروه خوش آمدید\n\n"
             "ربات را به گروه اضافه کنید و ادمین کنید",
             reply_markup=InlineKeyboardMarkup().add(
-                InlineKeyboardButton("افزودن به گروه", url=f"https://t.me/{username}?startgroup=botstart")
+                InlineKeyboardButton("افزودن به گروه", url=f"https://t.me/{bot.get_me().username}?startgroup=botstart")
             )
         )
 
@@ -1088,17 +1038,32 @@ if __name__ == '__main__':
     print("ربات مدیریت گروه")
     print("=" * 50)
     print(f"ادمین: {ADMIN_ID}")
-    print("نام کاربری: @GroupManagerBot (پیش‌فرض)")
+    print(f"نام کاربری: @{bot.get_me().username}")
     print("=" * 50)
-    print("🔄 ربات در حال اجرا...")
+    print("دستورات:")
+    print("پنل - نمایش پنل مدیریت")
+    print("آمار - نمایش آمار")
+    print("راهنما - نمایش راهنما")
+    print("بن/رفع بن - با ریپلای")
+    print("سکوت 10 - سکوت ۱۰ دقیقه‌ای")
+    print("رفع سکوت - رفع سکوت (با ریپلای)")
+    print("اخطار - اخطار به کاربر")
+    print("حذف اخطار - حذف یک اخطار (با ریپلای)")
+    print("پاک‌سازی - پاک کردن همه اخطارها (با ریپلای)")
+    print("تگ همه - تگ همه کاربران (با ریپلای)")
+    print("گزارش - کاربران عادی (با ریپلای)")
+    print("قفل استیکر روشن/خاموش - قفل استیکر")
+    print("قفل گیف روشن/خاموش - قفل گیف")
+    print("قفل ویس روشن/خاموش - قفل ویس")
+    print("قفل ویدیو روشن/خاموش - قفل ویدیو")
+    print("قفل عکس روشن/خاموش - قفل عکس")
+    print("قفل فایل روشن/خاموش - قفل فایل")
+    print("قفل همه روشن/خاموش - قفل همه")
+    print("تنظیم خوشامد متن - تنظیم متن اضافی خوش‌آمدگویی")
+    print("تنظیم اخطار عدد - تنظیم تعداد اخطارها")
+    print("=" * 50)
     
     try:
-        # استفاده از polling ساده به جای infinity_polling
-        bot.polling(none_stop=True, interval=0, timeout=30)
-    except KeyboardInterrupt:
-        print("\n⏹️ ربات متوقف شد")
+        bot.infinity_polling(timeout=10)
     except Exception as e:
-        print(f"❌ خطا در اجرای ربات: {e}")
-    finally:
-        conn.close()
-        print("👋 ربات بسته شد")
+        print(f"خطا: {e}")
