@@ -23,16 +23,16 @@ if not BOT_TOKEN:
     print("❌ توکن ربات پیدا نشد! متغیر BOT_TOKEN را تنظیم کنید.")
     exit(1)
 
-# ===== تنظیمات اتصال به تلگرام با timeout بیشتر و retry =====
-apihelper.CONNECT_TIMEOUT = 60
-apihelper.READ_TIMEOUT = 60
+# ===== تنظیمات اتصال به تلگرام =====
+apihelper.CONNECT_TIMEOUT = 30
+apihelper.READ_TIMEOUT = 30
 
 # ایجاد Session با Retry
 session = requests.Session()
 retry = Retry(
-    total=5,
-    read=5,
-    connect=5,
+    total=3,
+    read=3,
+    connect=3,
     backoff_factor=0.5,
     status_forcelist=[500, 502, 503, 504]
 )
@@ -40,10 +40,34 @@ adapter = HTTPAdapter(max_retries=retry)
 session.mount('http://', adapter)
 session.mount('https://', adapter)
 
-# ===== راه‌اندازی ربات =====
+# ===== راه‌اندازی ربات با غیرفعال کردن get_me =====
 bot = telebot.TeleBot(BOT_TOKEN)
 bot.session = session
 bot.parse_mode = 'HTML'
+
+# غیرفعال کردن دریافت اطلاعات ربات در حین اجرا
+# با این کار از timeout در polling جلوگیری می‌شود
+import types
+def get_me_skip(self):
+    """جلوگیری از دریافت اطلاعات ربات در حین polling"""
+    if not hasattr(self, '_cached_user'):
+        try:
+            self._cached_user = telebot.types.User(
+                id=0,
+                is_bot=True,
+                first_name="GroupManagerBot",
+                username="GroupManagerBot"
+            )
+        except:
+            self._cached_user = telebot.types.User(
+                id=0,
+                is_bot=True,
+                first_name="GroupManagerBot"
+            )
+    return self._cached_user
+
+# جایگزین کردن متد get_me با نسخه کش شده
+bot.get_me = types.MethodType(get_me_skip, bot)
 
 # ===== دیتابیس =====
 conn = sqlite3.connect('bot.db', check_same_thread=False)
@@ -357,12 +381,7 @@ def report_keyboard(report_id):
 @bot.message_handler(commands=['start'])
 def start(msg):
     if msg.chat.type == 'private':
-        try:
-            bot_info = bot.get_me()
-            username = bot_info.username
-        except:
-            username = "GroupManagerBot"
-        
+        username = "GroupManagerBot"  # نام پیش‌فرض
         bot.send_message(msg.chat.id, 
             "به ربات مدیریت گروه خوش آمدید\n\n"
             "ربات را به گروه اضافه کنید و ادمین کنید",
@@ -1063,69 +1082,23 @@ def callback(call):
         bot.delete_message(group_id, call.message.message_id)
         bot.answer_callback_query(call.id, "گزارش حذف شد")
 
-# ===== تست اتصال =====
-def test_connection():
-    try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(5)
-        result = sock.connect_ex(('api.telegram.org', 443))
-        sock.close()
-        if result == 0:
-            print("✅ اتصال به Telegram API برقرار است")
-            return True
-        else:
-            print("⚠️ اتصال به Telegram API با مشکل مواجه است")
-            return False
-    except Exception as e:
-        print(f"⚠️ تست اتصال ناموفق بود: {e}")
-        return False
-
 # ===== اجرا =====
 if __name__ == '__main__':
     print("=" * 50)
     print("ربات مدیریت گروه")
     print("=" * 50)
     print(f"ادمین: {ADMIN_ID}")
-    
-    # تست اتصال
-    test_connection()
-    
-    # دریافت اطلاعات ربات با timeout کوتاه
-    bot_username = "GroupManagerBot"  # مقدار پیش‌فرض
-    try:
-        # تنظیم timeout کمتر برای این درخواست
-        apihelper.CONNECT_TIMEOUT = 10
-        apihelper.READ_TIMEOUT = 10
-        
-        bot_info = bot.get_me()
-        bot_username = bot_info.username
-        print(f"نام کاربری: @{bot_username}")
-        print(f"نام ربات: {bot_info.first_name}")
-        print(f"آیدی: {bot_info.id}")
-    except Exception as e:
-        print(f"⚠️ دریافت اطلاعات ربات با خطا مواجه شد (timeout)")
-        print(f"⚠️ استفاده از نام کاربری پیش‌فرض: @{bot_username}")
-    
-    # برگرداندن timeout به حالت عادی برای polling
-    apihelper.CONNECT_TIMEOUT = 60
-    apihelper.READ_TIMEOUT = 60
-    
+    print("نام کاربری: @GroupManagerBot (پیش‌فرض)")
     print("=" * 50)
     print("🔄 ربات در حال اجرا...")
     
     try:
-        # استفاده از infinity_polling با timeout مناسب
-        bot.infinity_polling(timeout=30, long_polling_timeout=30)
+        # استفاده از polling ساده به جای infinity_polling
+        bot.polling(none_stop=True, interval=0, timeout=30)
     except KeyboardInterrupt:
         print("\n⏹️ ربات متوقف شد")
     except Exception as e:
         print(f"❌ خطا در اجرای ربات: {e}")
-        # تلاش مجدد با روش دیگر
-        try:
-            print("🔄 تلاش مجدد با روش polling معمولی...")
-            bot.polling(none_stop=True, interval=0, timeout=30)
-        except Exception as e2:
-            print(f"❌ خطا در polling: {e2}")
     finally:
         conn.close()
         print("👋 ربات بسته شد")
