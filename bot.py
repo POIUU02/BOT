@@ -30,7 +30,18 @@ except Exception as e:
     print("🔄 تلاش مجدد در 5 ثانیه...")
     time.sleep(5)
 
-bot = telebot.TeleBot(BOT_TOKEN, timeout=60)
+# ===== تنظیم timeout برای telebot =====
+try:
+    # تلاش با پارامتر timeout
+    bot = telebot.TeleBot(BOT_TOKEN, timeout=60)
+except TypeError:
+    # در نسخه‌های جدیدتر
+    from telebot import apihelper
+    apihelper.READ_TIMEOUT = 60
+    apihelper.CONNECT_TIMEOUT = 60
+    bot = telebot.TeleBot(BOT_TOKEN)
+    print("✅ تنظیمات timeout با apihelper اعمال شد")
+
 bot.parse_mode = 'HTML'
 
 # ===== دیتابیس =====
