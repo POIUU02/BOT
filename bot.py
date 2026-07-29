@@ -10,6 +10,9 @@ from datetime import datetime
 import jdatetime
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+import threading
+import queue
+from contextlib import contextmanager
 
 # ===== گرفتن توکن از متغیر محیطی =====
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -21,21 +24,17 @@ if not BOT_TOKEN:
 
 # ===== تنظیمات تایم‌اوت =====
 try:
-    # تست اتصال به تلگرام
     test_url = f"https://api.telegram.org/bot{BOT_TOKEN}/getMe"
     response = requests.get(test_url, timeout=10)
     print("✅ اتصال به تلگرام برقرار شد")
 except Exception as e:
     print(f"❌ خطا در اتصال به تلگرام: {e}")
-    print("🔄 تلاش مجدد در 5 ثانیه...")
     time.sleep(5)
 
 # ===== تنظیم timeout برای telebot =====
 try:
-    # تلاش با پارامتر timeout
     bot = telebot.TeleBot(BOT_TOKEN, timeout=60)
 except TypeError:
-    # در نسخه‌های جدیدتر
     from telebot import apihelper
     apihelper.READ_TIMEOUT = 60
     apihelper.CONNECT_TIMEOUT = 60
@@ -44,197 +43,215 @@ except TypeError:
 
 bot.parse_mode = 'HTML'
 
-# ===== دیتابیس =====
-conn = sqlite3.connect('bot.db', check_same_thread=False)
-c = conn.cursor()
+# ===== کلاس مدیریت دیتابیس با thread-safe =====
+class Database:
+    def __init__(self, db_file='bot.db'):
+        self.db_file = db_file
+        self.local = threading.local()
+        
+    def get_connection(self):
+        if not hasattr(self.local, 'conn'):
+            self.local.conn = sqlite3.connect(self.db_file, check_same_thread=False)
+            self.local.conn.row_factory = sqlite3.Row
+        return self.local.conn
+    
+    def get_cursor(self):
+        return self.get_connection().cursor()
+    
+    @contextmanager
+    def cursor(self):
+        conn = self.get_connection()
+        c = conn.cursor()
+        try:
+            yield c
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            raise e
+        finally:
+            c.close()
+    
+    def execute(self, query, params=()):
+        with self.cursor() as c:
+            c.execute(query, params)
+            return c
 
-c.execute('''
-    CREATE TABLE IF NOT EXISTS groups (
-        group_id INTEGER PRIMARY KEY,
-        welcome_text TEXT,
-        max_warnings INTEGER DEFAULT 3,
-        lock_sticker INTEGER DEFAULT 0,
-        lock_gif INTEGER DEFAULT 0,
-        lock_voice INTEGER DEFAULT 0,
-        lock_video INTEGER DEFAULT 0,
-        lock_photo INTEGER DEFAULT 0,
-        lock_file INTEGER DEFAULT 0,
-        lock_all INTEGER DEFAULT 0
-    )
-''')
+db = Database()
 
-c.execute('''
-    CREATE TABLE IF NOT EXISTS users (
-        user_id INTEGER PRIMARY KEY,
-        name TEXT,
-        join_date TEXT
-    )
-''')
+# ===== ایجاد جداول =====
+def init_db():
+    with db.cursor() as c:
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS groups (
+                group_id INTEGER PRIMARY KEY,
+                welcome_text TEXT,
+                max_warnings INTEGER DEFAULT 3,
+                lock_sticker INTEGER DEFAULT 0,
+                lock_gif INTEGER DEFAULT 0,
+                lock_voice INTEGER DEFAULT 0,
+                lock_video INTEGER DEFAULT 0,
+                lock_photo INTEGER DEFAULT 0,
+                lock_file INTEGER DEFAULT 0,
+                lock_all INTEGER DEFAULT 0
+            )
+        ''')
+        
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                user_id INTEGER PRIMARY KEY,
+                name TEXT,
+                join_date TEXT
+            )
+        ''')
+        
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS members (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                group_id INTEGER,
+                user_id INTEGER,
+                warnings INTEGER DEFAULT 0,
+                muted INTEGER DEFAULT 0,
+                banned INTEGER DEFAULT 0,
+                messages INTEGER DEFAULT 0,
+                UNIQUE(group_id, user_id)
+            )
+        ''')
+        
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS reports (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                group_id INTEGER,
+                reporter_id INTEGER,
+                reported_id INTEGER,
+                message_id INTEGER,
+                reason TEXT,
+                status TEXT DEFAULT 'pending',
+                date TEXT
+            )
+        ''')
+        
+        # افزودن ستون‌های جدید در صورت عدم وجود
+        columns = ['lock_sticker', 'lock_gif', 'lock_voice', 'lock_video', 'lock_photo', 'lock_file', 'lock_all']
+        for col in columns:
+            try:
+                c.execute(f"ALTER TABLE groups ADD COLUMN {col} INTEGER DEFAULT 0")
+            except:
+                pass
+    
+    print("✅ دیتابیس آماده است")
 
-c.execute('''
-    CREATE TABLE IF NOT EXISTS members (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        group_id INTEGER,
-        user_id INTEGER,
-        warnings INTEGER DEFAULT 0,
-        muted INTEGER DEFAULT 0,
-        banned INTEGER DEFAULT 0,
-        messages INTEGER DEFAULT 0,
-        UNIQUE(group_id, user_id)
-    )
-''')
+init_db()
 
-c.execute('''
-    CREATE TABLE IF NOT EXISTS reports (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        group_id INTEGER,
-        reporter_id INTEGER,
-        reported_id INTEGER,
-        message_id INTEGER,
-        reason TEXT,
-        status TEXT DEFAULT 'pending',
-        date TEXT
-    )
-''')
-
-try:
-    c.execute("ALTER TABLE groups ADD COLUMN lock_sticker INTEGER DEFAULT 0")
-except:
-    pass
-try:
-    c.execute("ALTER TABLE groups ADD COLUMN lock_gif INTEGER DEFAULT 0")
-except:
-    pass
-try:
-    c.execute("ALTER TABLE groups ADD COLUMN lock_voice INTEGER DEFAULT 0")
-except:
-    pass
-try:
-    c.execute("ALTER TABLE groups ADD COLUMN lock_video INTEGER DEFAULT 0")
-except:
-    pass
-try:
-    c.execute("ALTER TABLE groups ADD COLUMN lock_photo INTEGER DEFAULT 0")
-except:
-    pass
-try:
-    c.execute("ALTER TABLE groups ADD COLUMN lock_file INTEGER DEFAULT 0")
-except:
-    pass
-try:
-    c.execute("ALTER TABLE groups ADD COLUMN lock_all INTEGER DEFAULT 0")
-except:
-    pass
-
-conn.commit()
-print("✅ دیتابیس آماده است")
-
-# ===== توابع دیتابیس =====
+# ===== توابع دیتابیس (با thread-safe) =====
 def get_welcome(group_id):
-    c.execute('SELECT welcome_text FROM groups WHERE group_id = ?', (group_id,))
-    r = c.fetchone()
-    if r and r[0]:
-        return r[0]
-    return None
+    with db.cursor() as c:
+        c.execute('SELECT welcome_text FROM groups WHERE group_id = ?', (group_id,))
+        r = c.fetchone()
+        return r[0] if r and r[0] else None
 
 def set_welcome(group_id, text):
-    c.execute('INSERT OR REPLACE INTO groups (group_id, welcome_text) VALUES (?, ?)', (group_id, text))
-    conn.commit()
+    with db.cursor() as c:
+        c.execute('INSERT OR REPLACE INTO groups (group_id, welcome_text) VALUES (?, ?)', (group_id, text))
 
 def get_max_warn(group_id):
-    c.execute('SELECT max_warnings FROM groups WHERE group_id = ?', (group_id,))
-    r = c.fetchone()
-    return r[0] if r else 3
+    with db.cursor() as c:
+        c.execute('SELECT max_warnings FROM groups WHERE group_id = ?', (group_id,))
+        r = c.fetchone()
+        return r[0] if r else 3
 
 def set_max_warn(group_id, count):
-    c.execute('INSERT OR REPLACE INTO groups (group_id, max_warnings) VALUES (?, ?)', (group_id, count))
-    conn.commit()
+    with db.cursor() as c:
+        c.execute('INSERT OR REPLACE INTO groups (group_id, max_warnings) VALUES (?, ?)', (group_id, count))
 
 def get_lock_settings(group_id):
-    c.execute('SELECT lock_sticker, lock_gif, lock_voice, lock_video, lock_photo, lock_file, lock_all FROM groups WHERE group_id = ?', (group_id,))
-    r = c.fetchone()
-    if r:
-        return {
-            'sticker': r[0] if r[0] is not None else 0,
-            'gif': r[1] if r[1] is not None else 0,
-            'voice': r[2] if r[2] is not None else 0,
-            'video': r[3] if r[3] is not None else 0,
-            'photo': r[4] if r[4] is not None else 0,
-            'file': r[5] if r[5] is not None else 0,
-            'all': r[6] if r[6] is not None else 0
-        }
-    return {'sticker': 0, 'gif': 0, 'voice': 0, 'video': 0, 'photo': 0, 'file': 0, 'all': 0}
+    with db.cursor() as c:
+        c.execute('SELECT lock_sticker, lock_gif, lock_voice, lock_video, lock_photo, lock_file, lock_all FROM groups WHERE group_id = ?', (group_id,))
+        r = c.fetchone()
+        if r:
+            return {
+                'sticker': r[0] if r[0] is not None else 0,
+                'gif': r[1] if r[1] is not None else 0,
+                'voice': r[2] if r[2] is not None else 0,
+                'video': r[3] if r[3] is not None else 0,
+                'photo': r[4] if r[4] is not None else 0,
+                'file': r[5] if r[5] is not None else 0,
+                'all': r[6] if r[6] is not None else 0
+            }
+        return {'sticker': 0, 'gif': 0, 'voice': 0, 'video': 0, 'photo': 0, 'file': 0, 'all': 0}
 
 def update_lock_setting(group_id, setting, value):
-    c.execute(f'UPDATE groups SET {setting} = ? WHERE group_id = ?', (value, group_id))
-    conn.commit()
+    with db.cursor() as c:
+        c.execute(f'UPDATE groups SET {setting} = ? WHERE group_id = ?', (value, group_id))
 
 def add_user(user_id, name):
-    c.execute('INSERT OR IGNORE INTO users (user_id, name) VALUES (?, ?)', (user_id, name))
-    conn.commit()
+    with db.cursor() as c:
+        c.execute('INSERT OR IGNORE INTO users (user_id, name) VALUES (?, ?)', (user_id, name))
 
 def add_member(group_id, user_id):
-    c.execute('INSERT OR IGNORE INTO members (group_id, user_id) VALUES (?, ?)', (group_id, user_id))
-    conn.commit()
+    with db.cursor() as c:
+        c.execute('INSERT OR IGNORE INTO members (group_id, user_id) VALUES (?, ?)', (group_id, user_id))
 
 def add_msg(group_id, user_id):
-    c.execute('UPDATE members SET messages = messages + 1 WHERE group_id = ? AND user_id = ?', (group_id, user_id))
-    conn.commit()
+    with db.cursor() as c:
+        c.execute('UPDATE members SET messages = messages + 1 WHERE group_id = ? AND user_id = ?', (group_id, user_id))
 
 def add_warn(group_id, user_id):
-    c.execute('UPDATE members SET warnings = warnings + 1 WHERE group_id = ? AND user_id = ?', (group_id, user_id))
-    conn.commit()
-    c.execute('SELECT warnings FROM members WHERE group_id = ? AND user_id = ?', (group_id, user_id))
-    r = c.fetchone()
-    return r[0] if r else 1
+    with db.cursor() as c:
+        c.execute('UPDATE members SET warnings = warnings + 1 WHERE group_id = ? AND user_id = ?', (group_id, user_id))
+        c.execute('SELECT warnings FROM members WHERE group_id = ? AND user_id = ?', (group_id, user_id))
+        r = c.fetchone()
+        return r[0] if r else 1
 
 def clear_warn(group_id, user_id):
-    c.execute('UPDATE members SET warnings = 0 WHERE group_id = ? AND user_id = ?', (group_id, user_id))
-    conn.commit()
+    with db.cursor() as c:
+        c.execute('UPDATE members SET warnings = 0 WHERE group_id = ? AND user_id = ?', (group_id, user_id))
 
 def remove_one_warn(group_id, user_id):
-    c.execute('UPDATE members SET warnings = warnings - 1 WHERE group_id = ? AND user_id = ? AND warnings > 0', (group_id, user_id))
-    conn.commit()
-    c.execute('SELECT warnings FROM members WHERE group_id = ? AND user_id = ?', (group_id, user_id))
-    r = c.fetchone()
-    return r[0] if r else 0
+    with db.cursor() as c:
+        c.execute('UPDATE members SET warnings = warnings - 1 WHERE group_id = ? AND user_id = ? AND warnings > 0', (group_id, user_id))
+        c.execute('SELECT warnings FROM members WHERE group_id = ? AND user_id = ?', (group_id, user_id))
+        r = c.fetchone()
+        return r[0] if r else 0
 
 def mute_user(group_id, user_id):
-    c.execute('UPDATE members SET muted = 1 WHERE group_id = ? AND user_id = ?', (group_id, user_id))
-    conn.commit()
+    with db.cursor() as c:
+        c.execute('UPDATE members SET muted = 1 WHERE group_id = ? AND user_id = ?', (group_id, user_id))
 
 def unmute_user(group_id, user_id):
-    c.execute('UPDATE members SET muted = 0 WHERE group_id = ? AND user_id = ?', (group_id, user_id))
-    conn.commit()
+    with db.cursor() as c:
+        c.execute('UPDATE members SET muted = 0 WHERE group_id = ? AND user_id = ?', (group_id, user_id))
 
 def is_muted(group_id, user_id):
-    c.execute('SELECT muted FROM members WHERE group_id = ? AND user_id = ?', (group_id, user_id))
-    r = c.fetchone()
-    return r[0] == 1 if r else False
+    with db.cursor() as c:
+        c.execute('SELECT muted FROM members WHERE group_id = ? AND user_id = ?', (group_id, user_id))
+        r = c.fetchone()
+        return r[0] == 1 if r else False
 
 def get_top(group_id, limit=5):
-    c.execute('''SELECT u.name, m.messages FROM members m 
-                 JOIN users u ON m.user_id = u.user_id 
-                 WHERE m.group_id = ? ORDER BY m.messages DESC LIMIT ?''', (group_id, limit))
-    return c.fetchall()
+    with db.cursor() as c:
+        c.execute('''SELECT u.name, m.messages FROM members m 
+                     JOIN users u ON m.user_id = u.user_id 
+                     WHERE m.group_id = ? ORDER BY m.messages DESC LIMIT ?''', (group_id, limit))
+        return c.fetchall()
 
 def get_total_msgs(group_id):
-    c.execute('SELECT SUM(messages) FROM members WHERE group_id = ?', (group_id,))
-    r = c.fetchone()
-    return r[0] if r and r[0] else 0
+    with db.cursor() as c:
+        c.execute('SELECT SUM(messages) FROM members WHERE group_id = ?', (group_id,))
+        r = c.fetchone()
+        return r[0] if r and r[0] else 0
 
 def add_report(group_id, reporter_id, reported_id, msg_id, reason):
-    c.execute('''INSERT INTO reports (group_id, reporter_id, reported_id, message_id, reason, date) 
-                 VALUES (?, ?, ?, ?, ?, ?)''',
-              (group_id, reporter_id, reported_id, msg_id, reason, str(datetime.now())))
-    conn.commit()
-    return c.lastrowid
+    with db.cursor() as c:
+        c.execute('''INSERT INTO reports (group_id, reporter_id, reported_id, message_id, reason, date) 
+                     VALUES (?, ?, ?, ?, ?, ?)''',
+                  (group_id, reporter_id, reported_id, msg_id, reason, str(datetime.now())))
+        return c.lastrowid
 
 def upd_report(report_id, status):
-    c.execute('UPDATE reports SET status = ? WHERE id = ?', (status, report_id))
-    conn.commit()
+    with db.cursor() as c:
+        c.execute('UPDATE reports SET status = ? WHERE id = ?', (status, report_id))
 
-# ===== توابع کمکی =====
+# ===== بقیه توابع (بدون تغییر) =====
 def is_admin(user_id):
     return user_id == ADMIN_ID
 
@@ -286,7 +303,7 @@ def get_user_mention(user):
 def get_user_link(user):
     return f"<a href='tg://user?id={user.id}'>{user.first_name}</a>"
 
-# ===== کیبوردها =====
+# ===== کیبوردها (بدون تغییر) =====
 def admin_keyboard():
     kb = InlineKeyboardMarkup(row_width=2)
     kb.add(
@@ -352,23 +369,26 @@ def report_keyboard(report_id):
     )
     return kb
 
-# ===== دستورات =====
+# ===== دستورات (بخش‌های با دیتابیس اصلاح شده) =====
 @bot.message_handler(commands=['start'])
 def start(msg):
     if msg.chat.type == 'private':
-        bot.send_message(msg.chat.id, 
-            "به ربات مدیریت گروه خوش آمدید\n\n"
-            "ربات را به گروه اضافه کنید و ادمین کنید",
-            reply_markup=InlineKeyboardMarkup().add(
-                InlineKeyboardButton("افزودن به گروه", url=f"https://t.me/{bot.get_me().username}?startgroup=botstart")
+        try:
+            bot.send_message(msg.chat.id, 
+                "به ربات مدیریت گروه خوش آمدید\n\n"
+                "ربات را به گروه اضافه کنید و ادمین کنید",
+                reply_markup=InlineKeyboardMarkup().add(
+                    InlineKeyboardButton("افزودن به گروه", url=f"https://t.me/{bot.get_me().username}?startgroup=botstart")
+                )
             )
-        )
+        except Exception as e:
+            print(f"خطا در ارسال پیام start: {e}")
 
 @bot.message_handler(content_types=['new_chat_members'])
 def welcome(msg):
     group_id = msg.chat.id
-    c.execute('INSERT OR IGNORE INTO groups (group_id) VALUES (?)', (group_id,))
-    conn.commit()
+    with db.cursor() as c:
+        c.execute('INSERT OR IGNORE INTO groups (group_id) VALUES (?)', (group_id,))
     
     try:
         bot.delete_message(group_id, msg.message_id)
@@ -406,7 +426,7 @@ def member_left(msg):
     except:
         pass
 
-# ===== چک کردن قفل‌ها برای کاربران عادی =====
+# ===== چک کردن قفل‌ها =====
 @bot.message_handler(func=lambda m: m.chat.type in ['group', 'supergroup'], content_types=['sticker', 'animation', 'voice', 'video', 'photo', 'document'])
 def check_locks(msg):
     group_id = msg.chat.id
@@ -450,8 +470,8 @@ def handle(msg):
     user_id = msg.from_user.id
     text = msg.text.strip() if msg.text else ""
     
-    c.execute('INSERT OR IGNORE INTO groups (group_id) VALUES (?)', (group_id,))
-    conn.commit()
+    with db.cursor() as c:
+        c.execute('INSERT OR IGNORE INTO groups (group_id) VALUES (?)', (group_id,))
     
     add_user(user_id, msg.from_user.first_name)
     add_member(group_id, user_id)
@@ -497,7 +517,6 @@ def handle(msg):
         return
     
     # ===== دستورات ادمین =====
-    
     if text == 'پنل':
         bot.send_message(group_id, "🛠 پنل مدیریت\n\nروی پیام کاربر ریپلای کنید", reply_markup=admin_keyboard())
         return
@@ -522,76 +541,29 @@ def handle(msg):
         bot.send_message(group_id, t)
         return
     
-    # ===== دستورات قفل سرویس‌ها (متنی) =====
+    # ===== دستورات قفل سرویس‌ها =====
+    lock_commands = {
+        'قفل استیکر روشن': ('lock_sticker', 1, 'استیکر'),
+        'قفل استیکر خاموش': ('lock_sticker', 0, 'استیکر'),
+        'قفل گیف روشن': ('lock_gif', 1, 'گیف'),
+        'قفل گیف خاموش': ('lock_gif', 0, 'گیف'),
+        'قفل ویس روشن': ('lock_voice', 1, 'ویس'),
+        'قفل ویس خاموش': ('lock_voice', 0, 'ویس'),
+        'قفل ویدیو روشن': ('lock_video', 1, 'ویدیو'),
+        'قفل ویدیو خاموش': ('lock_video', 0, 'ویدیو'),
+        'قفل عکس روشن': ('lock_photo', 1, 'عکس'),
+        'قفل عکس خاموش': ('lock_photo', 0, 'عکس'),
+        'قفل فایل روشن': ('lock_file', 1, 'فایل'),
+        'قفل فایل خاموش': ('lock_file', 0, 'فایل'),
+        'قفل همه روشن': ('lock_all', 1, 'همه'),
+        'قفل همه خاموش': ('lock_all', 0, 'همه'),
+    }
     
-    if text == 'قفل استیکر روشن':
-        update_lock_setting(group_id, 'lock_sticker', 1)
-        bot.send_message(group_id, "🔒 قفل استیکر روشن شد\nکاربران عادی نمی‌توانند استیکر ارسال کنند")
-        return
-    
-    if text == 'قفل استیکر خاموش':
-        update_lock_setting(group_id, 'lock_sticker', 0)
-        bot.send_message(group_id, "🔓 قفل استیکر خاموش شد\nکاربران می‌توانند استیکر ارسال کنند")
-        return
-    
-    if text == 'قفل گیف روشن':
-        update_lock_setting(group_id, 'lock_gif', 1)
-        bot.send_message(group_id, "🔒 قفل گیف روشن شد\nکاربران عادی نمی‌توانند گیف ارسال کنند")
-        return
-    
-    if text == 'قفل گیف خاموش':
-        update_lock_setting(group_id, 'lock_gif', 0)
-        bot.send_message(group_id, "🔓 قفل گیف خاموش شد\nکاربران می‌توانند گیف ارسال کنند")
-        return
-    
-    if text == 'قفل ویس روشن':
-        update_lock_setting(group_id, 'lock_voice', 1)
-        bot.send_message(group_id, "🔒 قفل ویس روشن شد\nکاربران عادی نمی‌توانند ویس ارسال کنند")
-        return
-    
-    if text == 'قفل ویس خاموش':
-        update_lock_setting(group_id, 'lock_voice', 0)
-        bot.send_message(group_id, "🔓 قفل ویس خاموش شد\nکاربران می‌توانند ویس ارسال کنند")
-        return
-    
-    if text == 'قفل ویدیو روشن':
-        update_lock_setting(group_id, 'lock_video', 1)
-        bot.send_message(group_id, "🔒 قفل ویدیو روشن شد\nکاربران عادی نمی‌توانند ویدیو ارسال کنند")
-        return
-    
-    if text == 'قفل ویدیو خاموش':
-        update_lock_setting(group_id, 'lock_video', 0)
-        bot.send_message(group_id, "🔓 قفل ویدیو خاموش شد\nکاربران می‌توانند ویدیو ارسال کنند")
-        return
-    
-    if text == 'قفل عکس روشن':
-        update_lock_setting(group_id, 'lock_photo', 1)
-        bot.send_message(group_id, "🔒 قفل عکس روشن شد\nکاربران عادی نمی‌توانند عکس ارسال کنند")
-        return
-    
-    if text == 'قفل عکس خاموش':
-        update_lock_setting(group_id, 'lock_photo', 0)
-        bot.send_message(group_id, "🔓 قفل عکس خاموش شد\nکاربران می‌توانند عکس ارسال کنند")
-        return
-    
-    if text == 'قفل فایل روشن':
-        update_lock_setting(group_id, 'lock_file', 1)
-        bot.send_message(group_id, "🔒 قفل فایل روشن شد\nکاربران عادی نمی‌توانند فایل ارسال کنند")
-        return
-    
-    if text == 'قفل فایل خاموش':
-        update_lock_setting(group_id, 'lock_file', 0)
-        bot.send_message(group_id, "🔓 قفل فایل خاموش شد\nکاربران می‌توانند فایل ارسال کنند")
-        return
-    
-    if text == 'قفل همه روشن':
-        update_lock_setting(group_id, 'lock_all', 1)
-        bot.send_message(group_id, "🔒 قفل همه روشن شد\nکاربران عادی نمی‌توانند هیچ محتوایی ارسال کنند")
-        return
-    
-    if text == 'قفل همه خاموش':
-        update_lock_setting(group_id, 'lock_all', 0)
-        bot.send_message(group_id, "🔓 قفل همه خاموش شد\nکاربران می‌توانند محتوا ارسال کنند")
+    if text in lock_commands:
+        setting, value, name = lock_commands[text]
+        update_lock_setting(group_id, setting, value)
+        status = "روشن" if value else "خاموش"
+        bot.send_message(group_id, f"🔒 قفل {name} {status} شد")
         return
     
     # تنظیم خوش‌آمدگویی
@@ -656,6 +628,7 @@ def handle(msg):
     replied = msg.reply_to_message.from_user
     rid = replied.id
     
+    # ===== بقیه دستورات (بدون تغییر) =====
     if text == 'تگ همه':
         try:
             all_members = []
@@ -721,7 +694,6 @@ def handle(msg):
         except Exception as e:
             bot.send_message(group_id, f"❌ خطا: {e}")
     
-    # ===== سکوت =====
     elif text.startswith('سکوت'):
         if rid == user_id:
             bot.send_message(group_id, "❌ نمی‌توانید خود را سکوت کنید")
@@ -758,7 +730,6 @@ def handle(msg):
             else:
                 bot.send_message(group_id, f"❌ خطا: {e}")
     
-    # ===== رفع سکوت =====
     elif text == 'رفع سکوت':
         if rid == user_id:
             bot.send_message(group_id, "❌ نمی‌توانید خود را رفع سکوت کنید")
@@ -799,7 +770,6 @@ def handle(msg):
         except Exception as e:
             bot.send_message(group_id, f"❌ خطا: {e}")
     
-    # ===== اخطار =====
     elif text == 'اخطار':
         if rid == user_id:
             bot.send_message(group_id, "❌ نمی‌توانید به خود اخطار دهید")
@@ -822,7 +792,6 @@ def handle(msg):
             remaining = max_w - warns
             bot.send_message(group_id, f"⚠️ اخطار {warns} از {max_w} برای {get_user_link(replied)}\n{remaining} اخطار تا بن شدن", parse_mode='HTML')
     
-    # ===== حذف اخطار (یک عدد) =====
     elif text == 'حذف اخطار':
         if rid == user_id:
             bot.send_message(group_id, "❌ نمی‌توانید از خودتان اخطار حذف کنید")
@@ -831,9 +800,10 @@ def handle(msg):
             bot.send_message(group_id, "❌ ادمین اخطار ندارد")
             return
         
-        c.execute('SELECT warnings FROM members WHERE group_id = ? AND user_id = ?', (group_id, rid))
-        r = c.fetchone()
-        current_warns = r[0] if r else 0
+        with db.cursor() as c:
+            c.execute('SELECT warnings FROM members WHERE group_id = ? AND user_id = ?', (group_id, rid))
+            r = c.fetchone()
+            current_warns = r[0] if r else 0
         
         if current_warns <= 0:
             bot.send_message(group_id, f"ℹ️ کاربر {get_user_link(replied)} اخطاری ندارد", parse_mode='HTML')
@@ -842,7 +812,6 @@ def handle(msg):
         new_warns = remove_one_warn(group_id, rid)
         bot.send_message(group_id, f"✅ یک اخطار از {get_user_link(replied)} حذف شد\nتعداد اخطارهای فعلی: {new_warns}", parse_mode='HTML')
     
-    # ===== پاک‌سازی (همه اخطارها) =====
     elif text == 'پاک‌سازی':
         if rid == user_id:
             bot.send_message(group_id, "❌ نمی‌توانید اخطارهای خود را پاک کنید")
@@ -851,9 +820,10 @@ def handle(msg):
             bot.send_message(group_id, "❌ ادمین اخطار ندارد")
             return
         
-        c.execute('SELECT warnings FROM members WHERE group_id = ? AND user_id = ?', (group_id, rid))
-        r = c.fetchone()
-        current_warns = r[0] if r else 0
+        with db.cursor() as c:
+            c.execute('SELECT warnings FROM members WHERE group_id = ? AND user_id = ?', (group_id, rid))
+            r = c.fetchone()
+            current_warns = r[0] if r else 0
         
         if current_warns <= 0:
             bot.send_message(group_id, f"ℹ️ کاربر {get_user_link(replied)} اخطاری ندارد", parse_mode='HTML')
@@ -862,7 +832,7 @@ def handle(msg):
         clear_warn(group_id, rid)
         bot.send_message(group_id, f"✅ همه اخطارهای {get_user_link(replied)} پاک شد", parse_mode='HTML')
 
-# ===== دکمه‌ها =====
+# ===== دکمه‌ها (بدون تغییر) =====
 @bot.callback_query_handler(func=lambda call: True)
 def callback(call):
     user_id = call.from_user.id
@@ -891,7 +861,6 @@ def callback(call):
         bot.answer_callback_query(call.id, "روی پیام ریپلای کنید و 'حذف اخطار' بنویسید")
     elif data == 'clearwarn':
         bot.answer_callback_query(call.id, "روی پیام ریپلای کنید و 'پاک‌سازی' بنویسید")
-    
     elif data == 'tagadmins':
         admins = get_admins_mention(group_id)
         if admins:
@@ -900,11 +869,9 @@ def callback(call):
         else:
             bot.send_message(group_id, "❌ هیچ ادمینی برای تگ کردن وجود ندارد")
         bot.answer_callback_query(call.id, "تگ ادمین‌ها انجام شد")
-    
     elif data == 'tagall':
         try:
             all_members = []
-            
             admins = bot.get_chat_administrators(group_id)
             for a in admins:
                 if not a.user.is_bot:
@@ -930,18 +897,15 @@ def callback(call):
             
             msg_text = f"🔔 تگ همه کاربران\n\n"
             msg_text += " ".join(all_members[:50])
-            
             bot.send_message(group_id, msg_text, parse_mode='HTML')
             
             if len(all_members) > 50:
                 bot.send_message(group_id, f"✅ {len(all_members[:50])} کاربر از {len(all_members)} تگ شدند")
             else:
                 bot.send_message(group_id, f"✅ {len(all_members)} کاربر تگ شدند")
-            
         except Exception as e:
             bot.send_message(group_id, f"❌ خطا: {e}")
         bot.answer_callback_query(call.id, "تگ همه انجام شد")
-    
     elif data == 'lock_menu':
         try:
             bot.edit_message_text(
@@ -956,7 +920,6 @@ def callback(call):
             if "message is not modified" not in str(e):
                 bot.send_message(group_id, f"❌ خطا: {e}")
         bot.answer_callback_query(call.id)
-    
     elif data.startswith('lock_'):
         parts = data.split('_')
         setting = parts[1]
@@ -997,7 +960,6 @@ def callback(call):
                 except:
                     pass
         bot.answer_callback_query(call.id, f"{name_map.get(setting, setting)} {status} شد")
-    
     elif data == 'stats':
         top = get_top(group_id, 5)
         total = get_total_msgs(group_id)
@@ -1017,7 +979,6 @@ def callback(call):
         
         bot.edit_message_text(t, group_id, call.message.message_id)
         bot.answer_callback_query(call.id)
-    
     elif data == 'settings':
         bot.edit_message_text(
             "⚙️ تنظیمات گروه\n\n"
@@ -1032,7 +993,6 @@ def callback(call):
             group_id, call.message.message_id
         )
         bot.answer_callback_query(call.id)
-    
     elif data == 'back_main':
         bot.edit_message_text(
             "🛠 پنل مدیریت\n\nروی پیام کاربر ریپلای کنید",
@@ -1040,13 +1000,11 @@ def callback(call):
             reply_markup=admin_keyboard()
         )
         bot.answer_callback_query(call.id)
-    
     elif data.startswith('res_'):
         report_id = int(data.replace('res_', ''))
         upd_report(report_id, 'resolved')
         bot.edit_message_text(call.message.text + "\n\n✅ بررسی شد", group_id, call.message.message_id)
         bot.answer_callback_query(call.id, "گزارش بررسی شد")
-    
     elif data.startswith('del_'):
         report_id = int(data.replace('del_', ''))
         upd_report(report_id, 'deleted')
@@ -1065,38 +1023,16 @@ if __name__ == '__main__':
         print(f"شناسه: {me.id}")
     except Exception as e:
         print(f"❌ خطا در دریافت اطلاعات ربات: {e}")
-        print("🔄 تلاش مجدد...")
         time.sleep(3)
         try:
             me = bot.get_me()
             print(f"نام کاربری: @{me.username}")
         except:
             print("❌ خطا! ربات به تلگرام متصل نشد.")
-            print("💡 مطمئن شوید توکن درست است و اینترنت وصل است.")
     
     print(f"ادمین: {ADMIN_ID}")
     print("=" * 50)
-    print("دستورات:")
-    print("پنل - نمایش پنل مدیریت")
-    print("آمار - نمایش آمار")
-    print("راهنما - نمایش راهنما")
-    print("بن/رفع بن - با ریپلای")
-    print("سکوت 10 - سکوت ۱۰ دقیقه‌ای")
-    print("رفع سکوت - رفع سکوت (با ریپلای)")
-    print("اخطار - اخطار به کاربر")
-    print("حذف اخطار - حذف یک اخطار (با ریپلای)")
-    print("پاک‌سازی - پاک کردن همه اخطارها (با ریپلای)")
-    print("تگ همه - تگ همه کاربران (با ریپلای)")
-    print("گزارش - کاربران عادی (با ریپلای)")
-    print("قفل استیکر روشن/خاموش - قفل استیکر")
-    print("قفل گیف روشن/خاموش - قفل گیف")
-    print("قفل ویس روشن/خاموش - قفل ویس")
-    print("قفل ویدیو روشن/خاموش - قفل ویدیو")
-    print("قفل عکس روشن/خاموش - قفل عکس")
-    print("قفل فایل روشن/خاموش - قفل فایل")
-    print("قفل همه روشن/خاموش - قفل همه")
-    print("تنظیم خوشامد متن - تنظیم متن اضافی خوش‌آمدگویی")
-    print("تنظیم اخطار عدد - تنظیم تعداد اخطارها")
+    print("ربات با موفقیت راه‌اندازی شد!")
     print("=" * 50)
     
     while True:
