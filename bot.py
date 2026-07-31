@@ -251,7 +251,7 @@ def upd_report(report_id, status):
     with db.cursor() as c:
         c.execute('UPDATE reports SET status = ? WHERE id = ?', (status, report_id))
 
-# ===== بقیه توابع (بدون تغییر) =====
+# ===== بقیه توابع =====
 def is_admin(user_id):
     return user_id == ADMIN_ID
 
@@ -303,7 +303,28 @@ def get_user_mention(user):
 def get_user_link(user):
     return f"<a href='tg://user?id={user.id}'>{user.first_name}</a>"
 
-# ===== کیبوردها (بدون تغییر) =====
+def get_message_mentions(message):
+    """دریافت لیست کاربرانی که پیام رو دیدن یا ریپلای کردن"""
+    mentions = []
+    try:
+        # کاربرانی که پیام رو ریپلای کردن
+        if message.reply_to_message:
+            mentions.append(message.reply_to_message.from_user.id)
+        
+        # کاربرانی که پیام رو دیدن
+        try:
+            chat_members = bot.get_chat_members(message.chat.id, limit=50)
+            for member in chat_members:
+                if not member.user.is_bot and member.user.id != message.from_user.id:
+                    if member.user.id not in mentions:
+                        mentions.append(member.user.id)
+        except:
+            pass
+    except:
+        pass
+    return mentions
+
+# ===== کیبوردها =====
 def admin_keyboard():
     kb = InlineKeyboardMarkup(row_width=2)
     kb.add(
@@ -325,7 +346,8 @@ def admin_keyboard():
     )
     kb.add(
         InlineKeyboardButton("تگ ادمین‌ها", callback_data="tagadmins"),
-        InlineKeyboardButton("تگ همه", callback_data="tagall")
+        InlineKeyboardButton("تگ همه", callback_data="tagall"),
+        InlineKeyboardButton("تگ کاربران", callback_data="tagusers")
     )
     kb.add(
         InlineKeyboardButton("قفل سرویس‌ها", callback_data="lock_menu"),
@@ -369,7 +391,7 @@ def report_keyboard(report_id):
     )
     return kb
 
-# ===== دستورات (بخش‌های با دیتابیس اصلاح شده) =====
+# ===== دستورات =====
 @bot.message_handler(commands=['start'])
 def start(msg):
     if msg.chat.type == 'private':
@@ -517,10 +539,13 @@ def handle(msg):
         return
     
     # ===== دستورات ادمین =====
+    
+    # پنل
     if text == 'پنل':
         bot.send_message(group_id, "🛠 پنل مدیریت\n\nروی پیام کاربر ریپلای کنید", reply_markup=admin_keyboard())
         return
     
+    # آمار
     if text == 'آمار':
         top = get_top(group_id, 5)
         total = get_total_msgs(group_id)
@@ -539,6 +564,132 @@ def handle(msg):
             t += "❌ هیچ فعالیتی ثبت نشده است"
         
         bot.send_message(group_id, t)
+        return
+    
+    # ===== قابلیت جدید: اکو (Echo) =====
+    if text.startswith('اکو '):
+        echo_text = text.replace('اکو ', '').strip()
+        if echo_text:
+            # حذف پیام ادمین
+            try:
+                bot.delete_message(group_id, msg.message_id)
+            except:
+                pass
+            
+            # ارسال پیام اکو با ریپلای (اگر ریپلای داشته باشد)
+            if msg.reply_to_message:
+                bot.send_message(
+                    group_id,
+                    echo_text,
+                    reply_to_message_id=msg.reply_to_message.message_id
+                )
+            else:
+                bot.send_message(group_id, echo_text)
+        return
+    
+    # ===== قابلیت جدید: حذف پیام =====
+    if text == 'حذف':
+        if not msg.reply_to_message:
+            bot.send_message(group_id, "❌ لطفاً روی پیام مورد نظر ریپلای کنید")
+            return
+        
+        try:
+            bot.delete_message(group_id, msg.reply_to_message.message_id)
+            # حذف پیام دستور هم
+            try:
+                bot.delete_message(group_id, msg.message_id)
+            except:
+                pass
+        except Exception as e:
+            bot.send_message(group_id, f"❌ خطا در حذف پیام: {e}")
+        return
+    
+    # ===== قابلیت جدید: حذف چند پیام =====
+    if text.startswith('حذف '):
+        parts = text.split()
+        if len(parts) >= 2:
+            try:
+                count = int(parts[1])
+                if count < 1 or count > 50:
+                    bot.send_message(group_id, "❌ تعداد باید بین 1 تا 50 باشد")
+                    return
+                
+                deleted = 0
+                # دریافت و حذف پیام‌های اخیر
+                try:
+                    # حذف پیام‌های قبلی
+                    for i in range(min(count, 20)):
+                        try:
+                            history = bot.get_chat_history(group_id, limit=count + 5)
+                            for msg_item in history:
+                                if msg_item.message_id != msg.message_id:
+                                    try:
+                                        bot.delete_message(group_id, msg_item.message_id)
+                                        deleted += 1
+                                        if deleted >= count:
+                                            break
+                                    except:
+                                        pass
+                            break
+                        except:
+                            break
+                except:
+                    pass
+                
+                # حذف پیام دستور
+                try:
+                    bot.delete_message(group_id, msg.message_id)
+                except:
+                    pass
+                
+                if deleted > 0:
+                    bot.send_message(group_id, f"✅ {deleted} پیام با موفقیت حذف شد")
+                else:
+                    bot.send_message(group_id, "❌ هیچ پیامی برای حذف پیدا نشد")
+                    
+            except ValueError:
+                bot.send_message(group_id, "❌ لطفاً یک عدد معتبر وارد کنید:\nمثال: حذف 5")
+        return
+    
+    # ===== قابلیت جدید: تگ کاربران =====
+    if text == 'تگ کاربران':
+        if not msg.reply_to_message:
+            bot.send_message(group_id, "❌ لطفاً روی پیام مورد نظر ریپلای کنید")
+            return
+        
+        try:
+            user_mentions = []
+            
+            # کاربری که ریپلای شده
+            replied_user = msg.reply_to_message.from_user
+            if replied_user and not replied_user.is_bot:
+                user_mentions.append(get_user_mention(replied_user))
+            
+            # کاربران فعال گروه
+            try:
+                chat_members = bot.get_chat_members(group_id, limit=30)
+                for member in chat_members:
+                    if not member.user.is_bot and member.user.id != replied_user.id:
+                        user_mentions.append(get_user_mention(member.user))
+            except:
+                pass
+            
+            if not user_mentions:
+                bot.send_message(group_id, "❌ هیچ کاربری برای تگ کردن پیدا نشد")
+                return
+            
+            tag_text = f"🔔 توجه کاربران:\n\n"
+            tag_text += "\n".join(user_mentions[:30])
+            
+            bot.send_message(
+                group_id,
+                tag_text,
+                parse_mode='HTML',
+                reply_to_message_id=msg.reply_to_message.message_id
+            )
+            
+        except Exception as e:
+            bot.send_message(group_id, f"❌ خطا: {e}")
         return
     
     # ===== دستورات قفل سرویس‌ها =====
@@ -601,7 +752,11 @@ def handle(msg):
             "• حذف پین - حذف پین\n"
             "• اخطار - اخطار به کاربر\n"
             "• حذف اخطار - حذف یک اخطار\n"
-            "• پاک‌سازی - پاک کردن همه اخطارها\n\n"
+            "• پاک‌سازی - پاک کردن همه اخطارها\n"
+            "• حذف - حذف پیام ریپلای شده\n"
+            "• حذف 5 - حذف ۵ پیام آخر\n"
+            "• اکو متن - ربات متن رو تکرار میکنه\n"
+            "• تگ کاربران - تگ کاربران (با ریپلای)\n\n"
             "🔹 دستورات قفل سرویس‌ها:\n"
             "• قفل استیکر روشن/خاموش\n"
             "• قفل گیف روشن/خاموش\n"
@@ -628,7 +783,7 @@ def handle(msg):
     replied = msg.reply_to_message.from_user
     rid = replied.id
     
-    # ===== بقیه دستورات (بدون تغییر) =====
+    # ===== تگ همه =====
     if text == 'تگ همه':
         try:
             all_members = []
@@ -674,6 +829,7 @@ def handle(msg):
             bot.send_message(group_id, f"❌ خطا: {e}")
         return
     
+    # ===== بن =====
     if text == 'بن':
         if rid == user_id:
             bot.send_message(group_id, "❌ نمی‌توانید خود را بن کنید")
@@ -687,6 +843,7 @@ def handle(msg):
         except Exception as e:
             bot.send_message(group_id, f"❌ خطا: {e}")
     
+    # ===== رفع بن =====
     elif text == 'رفع بن':
         try:
             bot.unban_chat_member(group_id, rid)
@@ -694,6 +851,7 @@ def handle(msg):
         except Exception as e:
             bot.send_message(group_id, f"❌ خطا: {e}")
     
+    # ===== سکوت =====
     elif text.startswith('سکوت'):
         if rid == user_id:
             bot.send_message(group_id, "❌ نمی‌توانید خود را سکوت کنید")
@@ -730,6 +888,7 @@ def handle(msg):
             else:
                 bot.send_message(group_id, f"❌ خطا: {e}")
     
+    # ===== رفع سکوت =====
     elif text == 'رفع سکوت':
         if rid == user_id:
             bot.send_message(group_id, "❌ نمی‌توانید خود را رفع سکوت کنید")
@@ -756,6 +915,7 @@ def handle(msg):
             else:
                 bot.send_message(group_id, f"❌ خطا: {e}")
     
+    # ===== پین =====
     elif text == 'پین':
         try:
             bot.pin_chat_message(group_id, msg.reply_to_message.message_id)
@@ -763,6 +923,7 @@ def handle(msg):
         except Exception as e:
             bot.send_message(group_id, f"❌ خطا: {e}")
     
+    # ===== حذف پین =====
     elif text == 'حذف پین':
         try:
             bot.unpin_chat_message(group_id)
@@ -770,6 +931,7 @@ def handle(msg):
         except Exception as e:
             bot.send_message(group_id, f"❌ خطا: {e}")
     
+    # ===== اخطار =====
     elif text == 'اخطار':
         if rid == user_id:
             bot.send_message(group_id, "❌ نمی‌توانید به خود اخطار دهید")
@@ -792,6 +954,7 @@ def handle(msg):
             remaining = max_w - warns
             bot.send_message(group_id, f"⚠️ اخطار {warns} از {max_w} برای {get_user_link(replied)}\n{remaining} اخطار تا بن شدن", parse_mode='HTML')
     
+    # ===== حذف اخطار =====
     elif text == 'حذف اخطار':
         if rid == user_id:
             bot.send_message(group_id, "❌ نمی‌توانید از خودتان اخطار حذف کنید")
@@ -812,6 +975,7 @@ def handle(msg):
         new_warns = remove_one_warn(group_id, rid)
         bot.send_message(group_id, f"✅ یک اخطار از {get_user_link(replied)} حذف شد\nتعداد اخطارهای فعلی: {new_warns}", parse_mode='HTML')
     
+    # ===== پاک‌سازی =====
     elif text == 'پاک‌سازی':
         if rid == user_id:
             bot.send_message(group_id, "❌ نمی‌توانید اخطارهای خود را پاک کنید")
@@ -832,7 +996,7 @@ def handle(msg):
         clear_warn(group_id, rid)
         bot.send_message(group_id, f"✅ همه اخطارهای {get_user_link(replied)} پاک شد", parse_mode='HTML')
 
-# ===== دکمه‌ها (بدون تغییر) =====
+# ===== دکمه‌ها =====
 @bot.callback_query_handler(func=lambda call: True)
 def callback(call):
     user_id = call.from_user.id
@@ -906,6 +1070,8 @@ def callback(call):
         except Exception as e:
             bot.send_message(group_id, f"❌ خطا: {e}")
         bot.answer_callback_query(call.id, "تگ همه انجام شد")
+    elif data == 'tagusers':
+        bot.answer_callback_query(call.id, "روی پیام ریپلای کنید و 'تگ کاربران' بنویسید")
     elif data == 'lock_menu':
         try:
             bot.edit_message_text(
@@ -1031,6 +1197,11 @@ if __name__ == '__main__':
             print("❌ خطا! ربات به تلگرام متصل نشد.")
     
     print(f"ادمین: {ADMIN_ID}")
+    print("=" * 50)
+    print("📋 قابلیت‌های جدید اضافه شد:")
+    print("✅ اکو (Echo) - با 'اکو متن'")
+    print("✅ حذف چند پیام - با 'حذف 5'")
+    print("✅ تگ کاربران - با ریپلای و 'تگ کاربران'")
     print("=" * 50)
     print("ربات با موفقیت راه‌اندازی شد!")
     print("=" * 50)
